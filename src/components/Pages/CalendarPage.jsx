@@ -1,9 +1,10 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import {
   Calendar as CalendarIcon, ChevronLeft, ChevronRight,
-  Clock, Plus, ArrowLeft, Video, CheckCircle2, Mail,
+  Clock, Plus, ArrowLeft, Video, CheckCircle2, Mail, Trash2,
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
+import { api } from '../../services/api';
 import toast from 'react-hot-toast';
 
 const INITIAL_EVENTS = [
@@ -23,12 +24,35 @@ export default function CalendarPage() {
   const [newTime, setNewTime] = useState('11:00 AM');
   const [newCategory, setNewCategory] = useState('Work');
 
+  useEffect(() => {
+    async function loadCalendarEvents() {
+      try {
+        const res = await api.calendar.list();
+        if (res?.success && Array.isArray(res.data) && res.data.length > 0) {
+          const mapped = res.data.map(e => ({
+            id: e.id,
+            title: e.title,
+            date: e.start_time ? new Date(e.start_time).getDate() : 13,
+            time: e.start_time ? new Date(e.start_time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '10:00 AM',
+            category: 'Work',
+            type: e.location || 'Calendar Event',
+          }));
+          setEvents(mapped);
+        }
+      } catch {
+        // Keeps INITIAL_EVENTS
+      }
+    }
+    loadCalendarEvents();
+  }, []);
+
   const daysInMonth = 31;
   const startDayOffset = 4; // October 2026 starts on Thursday
 
-  const handleAddEvent = (e) => {
+  const handleAddEvent = async (e) => {
     e.preventDefault();
     if (!newTitle.trim()) return;
+
     const newEv = {
       id: `ev-${Date.now()}`,
       title: newTitle.trim(),
@@ -37,10 +61,34 @@ export default function CalendarPage() {
       category: newCategory,
       type: 'Calendar Event',
     };
+
     setEvents(prev => [...prev, newEv]);
     setNewTitle('');
     setShowAddEvent(false);
     toast.success(`Event added for Oct ${selectedDay}`);
+
+    try {
+      const startTime = new Date(2026, 9, selectedDay, 10, 0, 0).toISOString();
+      const endTime = new Date(2026, 9, selectedDay, 11, 0, 0).toISOString();
+      await api.calendar.create({
+        title: newEv.title,
+        start_time: startTime,
+        end_time: endTime,
+        location: newCategory === 'Client' ? 'Zoom Call' : 'Google Meet',
+      });
+    } catch {
+      // Local fallback active
+    }
+  };
+
+  const handleDeleteEvent = async (id) => {
+    setEvents(prev => prev.filter(e => e.id !== id));
+    toast.success('Event removed');
+    try {
+      await api.calendar.delete(id);
+    } catch {
+      // Local state updated
+    }
   };
 
   const selectedDayEvents = events.filter(e => e.date === selectedDay);
@@ -210,13 +258,22 @@ export default function CalendarPage() {
                       <span className="text-xs font-bold text-[#1E293B] dark:text-white line-clamp-1">
                         {ev.title}
                       </span>
-                      <span
-                        className={`text-[10px] font-semibold px-2 py-0.5 rounded border uppercase shrink-0 ${
-                          categoryBadgeColors[ev.category] || categoryBadgeColors.Work
-                        }`}
-                      >
-                        {ev.category}
-                      </span>
+                      <div className="flex items-center gap-1.5 shrink-0">
+                        <span
+                          className={`text-[10px] font-semibold px-2 py-0.5 rounded border uppercase ${
+                            categoryBadgeColors[ev.category] || categoryBadgeColors.Work
+                          }`}
+                        >
+                          {ev.category}
+                        </span>
+                        <button
+                          onClick={() => handleDeleteEvent(ev.id)}
+                          className="p-1 rounded text-[#7B8497] hover:text-rose-500 hover:bg-rose-50 dark:hover:bg-rose-950/30 transition-colors"
+                          title="Delete event"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
                     </div>
 
                     <div className="flex items-center gap-3 text-xs text-[#7B8497]">

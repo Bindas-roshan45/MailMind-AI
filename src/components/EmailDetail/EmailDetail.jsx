@@ -8,6 +8,7 @@ import {
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { Avatar, CategoryBadge } from '../ui';
+import api from '../../services/api';
 import toast from 'react-hot-toast';
 
 // ─── AI Analysis Panel ──────────────────────────────────────
@@ -68,39 +69,82 @@ function AIAnalysisCard({ analysis }) {
 
 // ─── AI Reply Panel ─────────────────────────────────────────
 function AIReplyPanel({ email }) {
+  const { sendEmail } = useApp();
   const [tone, setTone]             = useState('professional');
   const [language, setLanguage]     = useState('english');
   const [reply, setReply]           = useState(email?.suggestedReply || '');
+  const [draftId, setDraftId]       = useState(null);
   const [generating, setGenerating] = useState(false);
+  const [sending, setSending]       = useState(false);
   const [sent, setSent]             = useState(false);
 
-  const tones = ['Professional', 'Friendly', 'Short', 'Detailed'];
+  const tones = ['Professional', 'Friendly', 'Formal', 'Short'];
   const langs = ['English', 'Hindi', 'Hinglish'];
 
-  const handleRegenerate = () => {
+  const handleRegenerate = async () => {
     setGenerating(true);
-    setTimeout(() => {
-      setReply(
-        `Hi ${email?.from?.name?.split(' ')[0] || 'there'},\n\nThank you for getting in touch. I have reviewed your request and would be delighted to assist.\n\nPlease let me know a suitable time for a quick 10-minute touchpoint this week.\n\nBest regards,\nRoshan`
-      );
+    try {
+      const emailIdNum = typeof email?.id === 'number' ? email.id : undefined;
+      const res = await api.ai.generateDraft({
+        email_id: emailIdNum,
+        subject: email?.subject || 'Message',
+        body: email?.body || email?.preview || '',
+        tone: tone.toLowerCase(),
+        language: language,
+      });
+
+      if (res?.data?.content) {
+        setReply(res.data.content);
+        setDraftId(res.data.draft_id);
+        toast.success(`Generated ${tone} AI reply`);
+      } else {
+        toast.error('Could not generate reply');
+      }
+    } catch (err) {
+      toast.error(err.message || 'Generation failed');
+    } finally {
       setGenerating(false);
-      toast.success('Generated fresh AI reply');
-    }, 900);
+    }
   };
 
-  const handleSend = () => {
-    setSent(true);
-    toast.success('Reply sent successfully!');
-    setTimeout(() => setSent(false), 3000);
+  const handleSend = async () => {
+    if (!reply.trim()) {
+      toast.error('Reply text cannot be empty');
+      return;
+    }
+    setSending(true);
+    try {
+      await sendEmail({
+        to: email?.from?.email || email?.to,
+        subject: email?.subject?.startsWith('Re:') ? email.subject : `Re: ${email.subject}`,
+        body: reply,
+        draftId: draftId,
+      });
+      setSent(true);
+      setTimeout(() => setSent(false), 3000);
+    } catch {
+      // toast already shown in sendEmail
+    } finally {
+      setSending(false);
+    }
   };
 
-  const handleModify = (type) => {
-    if (type === 'shorten') {
-      setReply(`Hi ${email?.from?.name?.split(' ')[0] || 'there'},\n\nThanks for your email. I agree with your proposal and will send the details shortly.\n\nBest,\nRoshan`);
-    } else if (type === 'expand') {
-      setReply(prev => `${prev}\n\nAdditionally, please feel free to let me know if you require any specific adjustments to the timeline or scope of work.`);
-    } else if (type === 'improve') {
-      toast.success('Polished tone and clarity');
+  const handleModify = async (type) => {
+    if (!reply.trim()) {
+      toast.error('Draft is empty');
+      return;
+    }
+    const loadToast = toast.loading(`AI is modifying draft (${type})...`);
+    try {
+      const res = await api.ai.rewrite({ content: reply, mode: type });
+      if (res?.data?.rewritten_content) {
+        setReply(res.data.rewritten_content);
+        toast.success(`Polished tone: ${type}`, { id: loadToast });
+      } else {
+        toast.dismiss(loadToast);
+      }
+    } catch {
+      toast.error('Could not modify draft', { id: loadToast });
     }
   };
 
@@ -208,9 +252,10 @@ function AIReplyPanel({ email }) {
 
           <button
             onClick={handleSend}
+            disabled={sending}
             className={`btn-primary text-xs py-1.5 px-4 ${
               sent ? 'bg-emerald-600 hover:bg-emerald-700' : ''
-            }`}
+            } ${sending ? 'opacity-70 cursor-not-allowed' : ''}`}
           >
             {sent ? (
               <>
@@ -220,7 +265,7 @@ function AIReplyPanel({ email }) {
             ) : (
               <>
                 <Send className="w-3.5 h-3.5" />
-                <span>Send Reply</span>
+                <span>{sending ? 'Sending...' : 'Send Reply'}</span>
               </>
             )}
           </button>
@@ -239,7 +284,7 @@ const TABS = [
 ];
 
 export default function EmailDetail({ onBack }) {
-  const { selectedEmail, toggleStar, activePanel, setActivePanel, addTask } = useApp();
+  const { selectedEmail, toggleStar, deleteEmail, activePanel, setActivePanel, addTask } = useApp();
   const [showFullBody, setShowFullBody] = useState(false);
 
   if (!selectedEmail) {
@@ -321,7 +366,10 @@ export default function EmailDetail({ onBack }) {
             <Archive className="w-4 h-4" />
           </button>
           <button
-            onClick={() => toast.success('Email moved to trash')}
+            onClick={() => {
+              deleteEmail(email.id);
+              if (onBack) onBack();
+            }}
             className="p-1.5 rounded-lg hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-950/20 transition-colors"
             title="Delete"
           >

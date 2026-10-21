@@ -43,7 +43,7 @@ export default function AnalyticsPage() {
       {/* Top Metric Cards */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         {[
-          { label: 'Total Received (7d)', value: totalReceived, change: '+12% vs last week', icon: TrendingUp },
+          { label: 'Total Received (7d)', value: totalReceived, change: `${totalReplied} replied with AI`, icon: TrendingUp },
           { label: 'Avg Response Time', value: '18 mins', change: '4x faster with AI', icon: Clock },
           { label: 'AI Acceptance Rate', value: '94.2%', change: '34 replies generated', icon: Zap },
           { label: 'Weekly Time Saved', value: '5.4 hrs', change: 'Productivity boost', icon: CheckCircle2 },

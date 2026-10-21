@@ -5,6 +5,7 @@ Provides listing, filtering, search, detail view, and star/read updates.
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from typing import List, Optional
+from pydantic import BaseModel, Field
 
 from src.api.deps import get_current_user
 from src.config import settings
@@ -208,3 +209,97 @@ async def delete_email(
     await db.delete(email)
     await db.commit()
     return APIResponse(success=True, message="Email deleted successfully")
+
+
+class SendEmailRequest(BaseModel):
+    to: str = Field(..., min_length=3)
+    subject: str = Field(..., min_length=1)
+    body: str = Field(..., min_length=1)
+    draft_id: Optional[int] = None
+
+
+@router.post("/send", response_model=APIResponse, status_code=status.HTTP_201_CREATED, summary="Send Email with Explicit Approval")
+async def send_email(
+    payload: SendEmailRequest,
+    db: AsyncSession = Depends(get_session),
+    user: User = Depends(get_current_user),
+):
+    """
+    Send an email with explicit user authorization.
+    Dispatches via Gmail API if OAuth is connected; records in sent folder in demo mode.
+    NEVER sends without explicit user invocation of this endpoint.
+    """
+    from datetime import datetime, timezone
+    from src.crud.connected_account import connected_account_crud
+    from src.core.gmail import GmailClient
+    from src.core.security import decrypt_secret
+    from src.models import AIReplyDraft, EmailUrgency
+
+    accounts = await connected_account_crud.get_by_user(db, user.id)
+    gmail_acc = next((a for a in accounts if a.provider == "gmail" and a.status == "connected"), None)
+
+    real_sent_id = None
+    if gmail_acc and gmail_acc.access_token_encrypted:
+        try:
+            raw_token = decrypt_secret(gmail_acc.access_token_encrypted)
+            raw_refresh = decrypt_secret(gmail_acc.refresh_token_encrypted) if gmail_acc.refresh_token_encrypted else None
+            client = GmailClient(
+                access_token=raw_token,
+                refresh_token=raw_refresh,
+                client_id=settings.GOOGLE_CLIENT_ID,
+                client_secret=settings.GOOGLE_CLIENT_SECRET,
+            )
+            sent_res = client.send_message(to=payload.to, subject=payload.subject, body=payload.body)
+            real_sent_id = sent_res.get("id") if sent_res else None
+        except Exception as exc:
+            # If real sending fails and not in demo mode, raise
+            if not settings.DEMO_MODE:
+                raise HTTPException(
+                    status_code=status.HTTP_502_BAD_GATEWAY,
+                    detail=f"Failed to send email via Gmail API: {str(exc)}"
+                )
+
+    # Persist sent email in user's sent folder
+    now = datetime.now(timezone.utc)
+    sent_email = Email(
+        user_id=user.id,
+        message_id=real_sent_id or f"sent-{user.id}-{int(now.timestamp())}",
+        from_name=user.name,
+        from_email=user.email,
+        to=payload.to,
+        subject=payload.subject,
+        preview=payload.body[:120].strip(),
+        body=payload.body,
+        received_at=now,
+        category=EmailCategory.WORK,
+        urgency=EmailUrgency.LOW,
+        requires_reply=False,
+        is_read=True,
+        is_starred=False,
+        is_important=False,
+        folder="sent",
+    )
+    db.add(sent_email)
+
+    # If linked to a draft, mark the draft as sent
+    if payload.draft_id:
+        draft = await db.get(AIReplyDraft, payload.draft_id)
+        if draft and draft.user_id == user.id:
+            draft.is_sent = True
+            db.add(draft)
+
+    await db.commit()
+    await db.refresh(sent_email)
+
+    return APIResponse(
+        success=True,
+        data={
+            "id": sent_email.id,
+            "to": sent_email.to,
+            "subject": sent_email.subject,
+            "folder": sent_email.folder,
+            "is_sent": True,
+            "gmail_message_id": real_sent_id,
+        },
+        message="Email sent successfully",
+    )

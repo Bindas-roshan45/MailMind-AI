@@ -1,14 +1,13 @@
 import { useState, useMemo } from 'react';
 import {
   BarChart3, TrendingUp, Clock, CheckCircle2, AlertTriangle, Mail,
-  Download, ArrowLeft, Calendar, Zap, CheckSquare, Bot, Sparkles,
-  FileSpreadsheet, FileText, Filter, Check, Eye, Bell, Video,
-  Users, RefreshCw, Sliders, ShieldAlert, PieChart as PieIcon,
-  ChevronDown, ExternalLink, Smartphone, Globe, MessageSquare,
+  ArrowLeft, Calendar, Zap, CheckSquare, Bot, Sparkles,
+  FileSpreadsheet, FileText, Check, Eye, PieChart as PieIcon,
+  ExternalLink,
 } from 'lucide-react';
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer,
-  PieChart, Pie, Cell, Legend,
+  PieChart, Pie, Cell,
 } from 'recharts';
 import { useApp } from '../../context/AppContext';
 import toast from 'react-hot-toast';

@@ -15,6 +15,7 @@ export default function Topbar() {
     sidebarOpen, setSidebarOpen,
     currentPage, setCurrentPage,
     isMockData,
+    integrationStatus,
   } = useApp();
 
   const [showNotif, setShowNotif]     = useState(false);
@@ -50,12 +51,26 @@ export default function Topbar() {
 
       {/* Right Controls */}
       <div className="flex items-center gap-2">
-        {/* Gmail Connection Status Pill */}
-        <div className="hidden lg:flex items-center gap-2 px-2.5 py-1 rounded-full bg-[#F5F7FC] dark:bg-[#0F172A] border border-[#E5EAF2] dark:border-[#334155] text-xs">
-          <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-          <span className="font-medium text-[#1E293B] dark:text-[#E2E8F0]">Gmail: Connected</span>
-          <span className="text-[11px] text-[#7B8497] border-l border-[#E5EAF2] dark:border-slate-700 pl-2">Sync 2m ago</span>
-        </div>
+        {/* Genuine Gmail / Demo Mode Connection Status Pill */}
+        <button
+          onClick={() => setCurrentPage('settings')}
+          className="hidden lg:flex items-center gap-2 px-2.5 py-1 rounded-full bg-[#F5F7FC] dark:bg-[#0F172A] border border-[#E5EAF2] dark:border-[#334155] text-xs hover:border-[#4169E1]/50 transition-colors cursor-pointer"
+          title="Click to manage integration settings"
+        >
+          {integrationStatus?.is_connected ? (
+            <>
+              <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+              <span className="font-medium text-[#1E293B] dark:text-[#E2E8F0]">Gmail: Connected</span>
+              <span className="text-[11px] text-[#7B8497] border-l border-[#E5EAF2] dark:border-slate-700 pl-2">Synced</span>
+            </>
+          ) : (
+            <>
+              <span className="w-2 h-2 rounded-full bg-amber-500" />
+              <span className="font-medium text-amber-700 dark:text-amber-400">Demo Mode</span>
+              <span className="text-[11px] text-[#7B8497] border-l border-[#E5EAF2] dark:border-slate-700 pl-2">Isolated</span>
+            </>
+          )}
+        </button>
 
         {/* Mock data indicator */}
         {isMockData && <MockDataBanner />}

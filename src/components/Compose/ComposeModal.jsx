@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { X, Send, Sparkles, Paperclip } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
+import { api } from '../../services/api';
 import toast from 'react-hot-toast';
 
 export default function ComposeModal() {
@@ -24,20 +25,35 @@ export default function ComposeModal() {
     setComposing(false);
   };
 
-  const handleAiDraft = () => {
-    if (!prompt.trim()) {
-      toast.error('Enter a prompt for AI drafting');
+  const handleAiDraft = async () => {
+    if (!prompt.trim() && !subject.trim()) {
+      toast.error('Enter a prompt or subject for AI drafting');
       return;
     }
     setAiGenerating(true);
-    setTimeout(() => {
-      setBody(
-        `Hi,\n\nI hope this email finds you well.\n\nRegarding ${subject || 'our discussion'}, ${prompt}.\n\nPlease let me know your thoughts or if you need any additional information.\n\nBest regards,\nRoshan Kumar`
-      );
-      setAiGenerating(false);
+    try {
+      const res = await api.ai.generateDraft({
+        subject: subject || 'New Message',
+        body: body,
+        prompt: prompt.trim(),
+        tone: 'professional',
+      });
+      if (res?.data?.content) {
+        setBody(res.data.content);
+        toast.success('AI drafted your email!');
+      } else {
+        throw new Error('No draft returned');
+      }
       setPrompt('');
-      toast.success('AI drafted your email!');
-    }, 800);
+    } catch {
+      // Graceful fallback if backend AI is unavailable
+      setBody(
+        `Hi,\n\nI hope this email finds you well.\n\nRegarding ${subject || 'our discussion'}, ${prompt}.\n\nPlease let me know your thoughts or if you need any additional information.\n\nBest regards,\nMailMind User`
+      );
+      toast.success('Draft created (offline mode)');
+    } finally {
+      setAiGenerating(false);
+    }
   };
 
   return (

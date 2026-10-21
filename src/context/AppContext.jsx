@@ -1,26 +1,41 @@
 import { createContext, useContext, useState, useCallback, useEffect } from 'react';
 import { MOCK_EMAILS, MOCK_USER, MOCK_NOTIFICATIONS, FOLDER_COUNTS, MOCK_TASKS } from '../data/mockData';
+import api from '../services/api';
+import toast from 'react-hot-toast';
 
 const AppContext = createContext(null);
 
 export function AppProvider({ children }) {
-  const [theme, setTheme]                   = useState(() => {
+  const [theme, setTheme] = useState(() => {
     return localStorage.getItem('mailmind_theme') || 'light';
   });
-  const [currentPage, setCurrentPage]       = useState('inbox'); // 'inbox' | 'analytics' | 'tasks' | 'calendar' | 'settings'
-  const [user, setUser]                     = useState(MOCK_USER);
-  const [emails, setEmails]                 = useState(MOCK_EMAILS);
-  const [selectedEmail, setSelectedEmail]   = useState(MOCK_EMAILS[0]);
-  const [activeFolder, setActiveFolder]     = useState('inbox');
-  const [activeFilter, setActiveFilter]     = useState('all');
-  const [searchQuery, setSearchQuery]       = useState('');
-  const [notifications, setNotifications]   = useState(MOCK_NOTIFICATIONS);
-  const [sidebarOpen, setSidebarOpen]       = useState(true);
-  const [composing, setComposing]           = useState(false);
-  const [replyTone, setReplyTone]           = useState('professional');
-  const [activePanel, setActivePanel]       = useState('ai_reply'); // 'ai_reply' | 'summary' | 'attachments' | 'thread'
-  const [tasks, setTasks]                   = useState(MOCK_TASKS);
-  const [isMockData]                        = useState(true);
+  const [currentPage, setCurrentPage] = useState('inbox'); // 'inbox' | 'analytics' | 'tasks' | 'calendar' | 'reports' | 'settings'
+  const [user, setUser] = useState(MOCK_USER);
+  const [emails, setEmails] = useState(MOCK_EMAILS);
+  const [selectedEmail, setSelectedEmail] = useState(MOCK_EMAILS[0]);
+  const [activeFolder, setActiveFolder] = useState('inbox');
+  const [activeFilter, setActiveFilter] = useState('all');
+  const [searchQuery, setSearchQuery] = useState('');
+  const [notifications, setNotifications] = useState(MOCK_NOTIFICATIONS);
+  const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [composing, setComposing] = useState(false);
+  const [replyTone, setReplyTone] = useState('professional');
+  const [activePanel, setActivePanel] = useState('ai_reply');
+  const [tasks, setTasks] = useState(MOCK_TASKS);
+  const [folderCounts, setFolderCounts] = useState(FOLDER_COUNTS);
+  const [preferences, setPreferences] = useState(null);
+  const [integrationStatus, setIntegrationStatus] = useState({
+    is_connected: false,
+    is_demo_mode: true,
+    is_oauth_configured: false,
+    connected_email: null,
+    account_status: 'disconnected',
+    last_sync: null,
+  });
+
+  const [loading, setLoading] = useState(true);
+  const [isBackendConnected, setIsBackendConnected] = useState(false);
+  const [isMockData, setIsMockData] = useState(true);
 
   // Sync theme with DOM and localStorage
   useEffect(() => {
@@ -38,23 +53,192 @@ export function AppProvider({ children }) {
     setTheme(prev => (prev === 'dark' ? 'light' : 'dark'));
   }, []);
 
-  const markAsRead = useCallback((emailId) => {
+  // ── Load Real Data from Backend on Mount ──
+  const loadInitialData = useCallback(async () => {
+    setLoading(true);
+    try {
+      // 1. Authenticate / Fetch Profile
+      const userRes = await api.auth.getMe().catch(() => null);
+      if (userRes?.success && userRes.data) {
+        setUser({
+          id: userRes.data.id,
+          name: userRes.data.name,
+          email: userRes.data.email,
+          plan: userRes.data.plan || 'Pro Plan',
+        });
+        setIsMockData(userRes.demo_mode ?? false);
+      }
+
+      // 2. Fetch Emails & Folder Counts
+      const emailRes = await api.emails.list().catch(() => null);
+      if (emailRes?.success && emailRes.data?.items?.length) {
+        const mappedEmails = emailRes.data.items.map(e => ({
+          id: e.id,
+          from: { name: e.from_name, email: e.from_email, avatar: e.from_name?.slice(0, 2).toUpperCase() || 'U' },
+          to: e.to,
+          subject: e.subject,
+          preview: e.preview || (e.body ? e.body.slice(0, 80) : ''),
+          body: e.body || '',
+          time: e.received_at ? new Date(e.received_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'Recent',
+          date: e.received_at ? e.received_at.split('T')[0] : '',
+          category: e.category || 'Work',
+          isRead: e.is_read,
+          isStarred: e.is_starred,
+          isImportant: e.is_important,
+          folder: e.folder || 'inbox',
+          urgency: e.urgency || 'low',
+          requiresReply: e.requires_reply,
+          suggestedReply: e.ai_suggested_reply || null,
+          aiAnalysis: {
+            confidence: e.ai_confidence || 90,
+            category: e.category || 'Work',
+            priority: e.urgency === 'urgent' ? 'High' : 'Normal',
+            sentiment: 'Neutral',
+            requiresReply: e.requires_reply,
+            keyPoints: e.ai_summary || [],
+            suspiciousFlag: false,
+            extractedTasks: [],
+            extractedDeadlines: [],
+          },
+        }));
+
+        setEmails(mappedEmails);
+        if (mappedEmails.length > 0) {
+          setSelectedEmail(mappedEmails[0]);
+        }
+        if (emailRes.data.folder_counts) {
+          setFolderCounts(emailRes.data.folder_counts);
+        }
+      }
+
+      // 3. Fetch Tasks
+      const tasksRes = await api.tasks.list().catch(() => null);
+      if (tasksRes?.success && tasksRes.data) {
+        setTasks(tasksRes.data);
+      }
+
+      // 4. Fetch Notifications
+      const notifsRes = await api.notifications.list().catch(() => null);
+      if (notifsRes?.success && notifsRes.data?.items) {
+        setNotifications(
+          notifsRes.data.items.map(n => ({
+            id: n.id,
+            title: n.title,
+            body: n.body,
+            type: n.type || 'ai_draft',
+            read: n.is_read,
+            time: n.created_at ? 'Recently' : 'Just now',
+            emailId: n.email_id,
+          }))
+        );
+      }
+
+      // 5. Fetch Preferences & Integration Status
+      const [prefRes, statusRes] = await Promise.all([
+        api.preferences.get().catch(() => null),
+        api.auth.getGoogleStatus().catch(() => null),
+      ]);
+
+      if (prefRes?.success) setPreferences(prefRes.data);
+      if (statusRes?.success) setIntegrationStatus(statusRes.data);
+
+      setIsBackendConnected(true);
+    } catch (err) {
+      console.warn('Backend unavailable or network error, running in local fallback mode:', err);
+      setIsBackendConnected(false);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadInitialData();
+  }, [loadInitialData]);
+
+  // ── Actions Connected to Backend ──
+
+  const markAsRead = useCallback(async (emailId) => {
     setEmails(prev => prev.map(e => e.id === emailId ? { ...e, isRead: true } : e));
+    try {
+      await api.emails.markRead(emailId);
+    } catch {
+      // Optimistic update retained
+    }
   }, []);
 
-  const toggleStar = useCallback((emailId) => {
+  const toggleStar = useCallback(async (emailId) => {
     setEmails(prev => prev.map(e => e.id === emailId ? { ...e, isStarred: !e.isStarred } : e));
+    try {
+      await api.emails.toggleStar(emailId);
+    } catch {
+      // Optimistic update retained
+    }
   }, []);
 
-  const dismissNotification = useCallback((notifId) => {
+  const deleteEmail = useCallback(async (emailId) => {
+    setEmails(prev => prev.filter(e => e.id !== emailId));
+    try {
+      await api.emails.delete(emailId);
+      toast.success('Email deleted');
+    } catch {
+      toast.error('Failed to delete email on server');
+    }
+  }, []);
+
+  const dismissNotification = useCallback(async (notifId) => {
     setNotifications(prev => prev.map(n => n.id === notifId ? { ...n, read: true } : n));
+    try {
+      await api.notifications.markRead(notifId);
+    } catch {
+      // Local state updated
+    }
   }, []);
 
-  const toggleTask = useCallback((id) => {
+  const markAllNotificationsRead = useCallback(async () => {
+    setNotifications(prev => prev.map(n => ({ ...n, read: true })));
+    try {
+      await api.notifications.markAllRead();
+      toast.success('All notifications marked as read');
+    } catch {
+      // Local state updated
+    }
+  }, []);
+
+  const toggleTask = useCallback(async (id) => {
     setTasks(prev => prev.map(t => t.id === id ? { ...t, done: !t.done } : t));
+    try {
+      await api.tasks.toggle(id);
+    } catch {
+      // Local state updated
+    }
   }, []);
 
-  const addTask = useCallback((task) => {
+  const addTask = useCallback(async (task) => {
+    try {
+      const res = await api.tasks.create({
+        title: task.title,
+        priority: task.priority || 'medium',
+        email_id: task.emailId || null,
+      });
+      if (res?.success && res.data) {
+        setTasks(prev => [
+          {
+            id: res.data.id,
+            title: res.data.title,
+            priority: res.data.priority,
+            done: res.data.done,
+            dueDate: task.dueDate || 'Today',
+            email_id: task.emailId || null,
+          },
+          ...prev,
+        ]);
+        toast.success('Task created successfully');
+        return;
+      }
+    } catch {
+      // Fallback local task creation
+    }
+
     const newTask = {
       id: `task-${Date.now()}`,
       title: task.title,
@@ -64,43 +248,76 @@ export function AppProvider({ children }) {
       emailId: task.emailId || null,
     };
     setTasks(prev => [newTask, ...prev]);
+    toast.success('Task saved');
   }, []);
 
-  const deleteTask = useCallback((id) => {
+  const deleteTask = useCallback(async (id) => {
     setTasks(prev => prev.filter(t => t.id !== id));
+    try {
+      await api.tasks.delete(id);
+    } catch {
+      // Local state updated
+    }
   }, []);
 
-  const sendEmail = useCallback((newEmail) => {
-    const emailObj = {
-      id: `email-${Date.now()}`,
-      from: { name: user.name, email: user.email, avatar: 'RK' },
-      to: newEmail.to,
-      subject: newEmail.subject,
-      preview: newEmail.body.slice(0, 80),
-      body: newEmail.body,
-      time: 'Just now',
-      date: new Date().toISOString().split('T')[0],
-      category: 'Work',
-      isRead: true,
-      isStarred: false,
-      isImportant: false,
-      folder: 'sent',
-      urgency: 'low',
-      requiresReply: false,
-      aiAnalysis: {
-        confidence: 90,
+  const sendEmail = useCallback(async (newEmail) => {
+    try {
+      const res = await api.emails.send({
+        to: newEmail.to,
+        subject: newEmail.subject,
+        body: newEmail.body,
+        draft_id: newEmail.draftId || null,
+      });
+
+      const sentObj = {
+        id: res?.data?.id || `email-${Date.now()}`,
+        from: { name: user.name, email: user.email, avatar: 'RK' },
+        to: newEmail.to,
+        subject: newEmail.subject,
+        preview: newEmail.body.slice(0, 80),
+        body: newEmail.body,
+        time: 'Just now',
+        date: new Date().toISOString().split('T')[0],
         category: 'Work',
-        priority: 'Normal',
-        sentiment: 'Positive',
+        isRead: true,
+        isStarred: false,
+        isImportant: false,
+        folder: 'sent',
+        urgency: 'low',
         requiresReply: false,
-        keyPoints: ['Sent by user'],
-        suspiciousFlag: false,
-        extractedTasks: [],
-        extractedDeadlines: [],
-      },
-    };
-    setEmails(prev => [emailObj, ...prev]);
+        aiAnalysis: {
+          confidence: 90,
+          category: 'Work',
+          priority: 'Normal',
+          sentiment: 'Positive',
+          requiresReply: false,
+          keyPoints: ['Sent by user'],
+          suspiciousFlag: false,
+          extractedTasks: [],
+          extractedDeadlines: [],
+        },
+      };
+
+      setEmails(prev => [sentObj, ...prev]);
+      setFolderCounts(prev => ({ ...prev, sent: (prev.sent || 0) + 1 }));
+      toast.success('Email sent successfully');
+    } catch (err) {
+      toast.error(err.message || 'Failed to send email');
+      throw err;
+    }
   }, [user]);
+
+  const updatePreferences = useCallback(async (newPref) => {
+    try {
+      const res = await api.preferences.update(newPref);
+      if (res?.success) {
+        setPreferences(prev => ({ ...prev, ...newPref }));
+        toast.success('Preferences saved successfully');
+      }
+    } catch {
+      toast.error('Could not save preferences to server');
+    }
+  }, []);
 
   const unreadNotifCount = notifications.filter(n => !n.read).length;
 
@@ -125,10 +342,10 @@ export function AppProvider({ children }) {
     })();
 
     const matchSearch = !searchQuery ||
-      email.subject.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      email.from.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      email.preview.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      email.body.toLowerCase().includes(searchQuery.toLowerCase());
+      email.subject?.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      email.from?.name?.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      email.preview?.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      email.body?.toLowerCase().includes(searchQuery.toLowerCase());
 
     return matchFolder && matchFilter && matchSearch;
   });
@@ -143,16 +360,20 @@ export function AppProvider({ children }) {
       activeFolder, setActiveFolder,
       activeFilter, setActiveFilter,
       searchQuery, setSearchQuery,
-      notifications, setNotifications, unreadNotifCount, dismissNotification,
+      notifications, setNotifications, unreadNotifCount, dismissNotification, markAllNotificationsRead,
       sidebarOpen, setSidebarOpen,
       composing, setComposing,
       replyTone, setReplyTone,
       activePanel, setActivePanel,
       tasks, setTasks, toggleTask, addTask, deleteTask,
+      deleteEmail,
       sendEmail,
       markAsRead, toggleStar,
-      isMockData,
-      folderCounts: FOLDER_COUNTS,
+      preferences, updatePreferences,
+      integrationStatus, setIntegrationStatus,
+      isMockData, isBackendConnected, loading,
+      folderCounts,
+      refreshInitialData: loadInitialData,
     }}>
       {children}
     </AppContext.Provider>

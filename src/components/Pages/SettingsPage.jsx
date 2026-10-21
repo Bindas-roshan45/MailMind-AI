@@ -1,26 +1,58 @@
 import { useState } from 'react';
 import {
-  Settings, Mail, Bot, Bell, Moon, Sun, RefreshCw, Save, ArrowLeft,
+  Settings, Mail, Bot, Bell, Moon, Sun, RefreshCw, Save, ArrowLeft, ExternalLink, ShieldAlert,
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
+import { api } from '../../services/api';
 import toast from 'react-hot-toast';
 
 export default function SettingsPage() {
-  const { user, theme, toggleTheme, setCurrentPage } = useApp();
+  const { user, theme, toggleTheme, setCurrentPage, preferences, updatePreferences, integrationStatus, refreshInitialData } = useApp();
 
   const [syncInterval, setSyncInterval] = useState('2');
   const [autoSync, setAutoSync] = useState(true);
-  const [model, setModel] = useState('gemini-1.5-pro');
-  const [defaultTone, setDefaultTone] = useState('professional');
-  const [autoDraft, setAutoDraft] = useState(true);
+  const [model, setModel] = useState(() => preferences?.ai_model || 'gemini-3.5-flash-lite');
+  const [defaultTone, setDefaultTone] = useState(() => preferences?.default_tone || 'professional');
+  const [autoDraft, setAutoDraft] = useState(() => preferences?.auto_reply_enabled ?? true);
   const [phishingShield, setPhishingShield] = useState(true);
   const [pushNotifs, setPushNotifs] = useState(true);
   const [soundAlerts, setSoundAlerts] = useState(false);
   const [dailyDigest, setDailyDigest] = useState(true);
   const [activeTab, setActiveTab] = useState('general');
+  const [connectingGoogle, setConnectingGoogle] = useState(false);
 
-  const handleSave = () => {
-    toast.success('Settings saved successfully');
+  const handleSave = async () => {
+    await updatePreferences({
+      default_tone: defaultTone,
+      ai_model: model,
+      auto_reply_enabled: autoDraft,
+    });
+  };
+
+  const handleConnectGmail = async () => {
+    setConnectingGoogle(true);
+    try {
+      const res = await api.auth.getGoogleAuthUrl();
+      if (res?.auth_url) {
+        window.location.href = res.auth_url;
+      } else {
+        toast.error('Google OAuth URL not returned from backend');
+      }
+    } catch (err) {
+      toast.error(err.message || 'OAuth not configured on backend.');
+    } finally {
+      setConnectingGoogle(false);
+    }
+  };
+
+  const handleDisconnectGmail = async () => {
+    try {
+      await api.auth.disconnectGoogle();
+      toast.success('Gmail disconnected');
+      refreshInitialData();
+    } catch (err) {
+      toast.error(err.message || 'Failed to disconnect Gmail');
+    }
   };
 
   return (
@@ -152,15 +184,13 @@ export default function SettingsPage() {
                   <p className="text-xs font-semibold text-[#1E293B] dark:text-white">AI Engine Provider</p>
                   <p className="text-[11px] text-[#7B8497]">Primary intelligence powering auto-replies and summaries</p>
                 </div>
-                <select
+                  <select
                   value={model}
                   onChange={e => setModel(e.target.value)}
-                  className="input-minimal w-52 cursor-pointer text-xs font-medium"
+                  className="input-minimal w-60 cursor-pointer text-xs font-medium"
                 >
-                  <option value="gemini-1.5-pro">Google Gemini 1.5 Pro</option>
-                  <option value="gemini-1.5-flash">Google Gemini 1.5 Flash</option>
-                  <option value="gpt-4o">OpenAI GPT-4o</option>
-                  <option value="claude-3-5">Anthropic Claude 3.5 Sonnet</option>
+                  <option value="gemini-3.5-flash-lite">Gemini 3.5 Flash Lite (Verified & Fast)</option>
+                  <option value="gemini-3.8-flash">Gemini 3.8 Flash (High Capability)</option>
                 </select>
               </div>
 
@@ -176,6 +206,7 @@ export default function SettingsPage() {
                 >
                   <option value="professional">Professional</option>
                   <option value="friendly">Friendly</option>
+                  <option value="formal">Formal</option>
                   <option value="short">Short</option>
                   <option value="detailed">Detailed</option>
                 </select>
@@ -215,29 +246,70 @@ export default function SettingsPage() {
             <div className="card-white p-5 space-y-4">
               <h2 className="text-sm font-bold text-[#1E293B] dark:text-white">Gmail Integration Status</h2>
 
-              <div className="p-3.5 rounded-lg border border-emerald-200 dark:border-emerald-800/40 bg-emerald-50/50 dark:bg-emerald-950/20 flex items-center justify-between">
-                <div className="flex items-center gap-3">
-                  <div className="w-8 h-8 rounded-full bg-emerald-500 text-white flex items-center justify-center font-bold text-xs">
-                    G
-                  </div>
-                  <div>
-                    <p className="text-xs font-bold text-[#1E293B] dark:text-white">{user.email}</p>
-                    <div className="flex items-center gap-1.5 mt-0.5">
-                      <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-                      <span className="text-[11px] font-medium text-emerald-700 dark:text-emerald-400">OAuth 2.0 Connected</span>
-                      <span className="text-[11px] text-[#7B8497]">• Last synced 2 min ago</span>
+              {integrationStatus.is_connected ? (
+                <div className="p-3.5 rounded-lg border border-emerald-200 dark:border-emerald-800/40 bg-emerald-50/50 dark:bg-emerald-950/20 flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <div className="w-8 h-8 rounded-full bg-emerald-500 text-white flex items-center justify-center font-bold text-xs">
+                      G
+                    </div>
+                    <div>
+                      <p className="text-xs font-bold text-[#1E293B] dark:text-white">{integrationStatus.connected_email || user.email}</p>
+                      <div className="flex items-center gap-1.5 mt-0.5">
+                        <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+                        <span className="text-[11px] font-medium text-emerald-700 dark:text-emerald-400">OAuth 2.0 Connected</span>
+                        <span className="text-[11px] text-[#7B8497]">• Synced with Google</span>
+                      </div>
                     </div>
                   </div>
-                </div>
 
-                <button
-                  onClick={() => toast.success('Syncing Gmail inbox now...')}
-                  className="btn-secondary text-xs flex items-center gap-1.5"
-                >
-                  <RefreshCw className="w-3.5 h-3.5 text-[#4169E1]" />
-                  <span>Sync Now</span>
-                </button>
-              </div>
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => { refreshInitialData(); toast.success('Syncing Gmail inbox now...'); }}
+                      className="btn-secondary text-xs flex items-center gap-1.5"
+                    >
+                      <RefreshCw className="w-3.5 h-3.5 text-[#4169E1]" />
+                      <span>Sync Now</span>
+                    </button>
+                    <button
+                      onClick={handleDisconnectGmail}
+                      className="text-xs px-3 py-1.5 rounded-lg text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/20 border border-rose-200 dark:border-rose-900/30 transition-colors font-medium"
+                    >
+                      Disconnect
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <div className="p-4 rounded-lg border border-amber-200 dark:border-amber-800/40 bg-amber-50/50 dark:bg-amber-950/20 space-y-3">
+                  <div className="flex items-start justify-between gap-4">
+                    <div className="flex items-start gap-3">
+                      <div className="w-8 h-8 rounded-full bg-amber-500/20 text-amber-600 dark:text-amber-400 flex items-center justify-center font-bold text-xs mt-0.5">
+                        <ShieldAlert className="w-4 h-4" />
+                      </div>
+                      <div>
+                        <p className="text-xs font-bold text-[#1E293B] dark:text-white">Demo Mode Active (Gmail Disconnected)</p>
+                        <p className="text-[11px] text-[#7B8497] mt-0.5">
+                          Currently operating in isolated Demo Mode using simulated demo data. Real inbox operations require genuine Google Cloud OAuth authorization.
+                        </p>
+                      </div>
+                    </div>
+
+                    <button
+                      onClick={handleConnectGmail}
+                      disabled={connectingGoogle}
+                      className="btn-primary text-xs py-1.5 px-3.5 flex items-center gap-1.5 shrink-0"
+                    >
+                      <ExternalLink className="w-3.5 h-3.5" />
+                      <span>{connectingGoogle ? 'Connecting...' : 'Connect Gmail'}</span>
+                    </button>
+                  </div>
+
+                  {!integrationStatus.is_oauth_configured && (
+                    <div className="text-[11px] text-amber-800 dark:text-amber-300/80 bg-amber-100/60 dark:bg-amber-900/20 p-2.5 rounded border border-amber-300/40">
+                      <strong>Setup Note:</strong> To connect a live Google account, specify <code>GOOGLE_CLIENT_ID</code> and <code>GOOGLE_CLIENT_SECRET</code> in <code>backend/.env</code>.
+                    </div>
+                  )}
+                </div>
+              )}
 
               <div className="flex items-center justify-between py-2 border-b border-[#E5EAF2] dark:border-[#334155]">
                 <div>
