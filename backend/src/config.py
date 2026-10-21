@@ -68,7 +68,7 @@ class Settings(BaseSettings):
     OPENAI_MODEL: str = "gpt-4o"
     GEMINI_API_KEY: str = ""
     GEMINI_MODEL: str = "gemini-3.5-flash-lite"
-    AI_PROVIDER: str = "openai"  # or: gemini
+    AI_PROVIDER: str = "gemini"  # default to gemini
 
     # CORS (CORS_ORIGINS is accepted as an alias from .env.example)
     BACKEND_CORS_ORIGINS: Union[List[str], str] = Field(

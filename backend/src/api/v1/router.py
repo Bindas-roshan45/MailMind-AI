@@ -14,6 +14,7 @@ from src.api.v1.endpoints import (
     auto_reply,
     preferences,
     drafts,
+    notifications,
 )
 
 api_router = APIRouter()
@@ -28,3 +29,4 @@ api_router.include_router(calendar.router, prefix="/calendar", tags=["Calendar"]
 api_router.include_router(auto_reply.router, prefix="/auto-reply", tags=["Auto Reply"])
 api_router.include_router(preferences.router, prefix="/preferences", tags=["Preferences"])
 api_router.include_router(drafts.router, prefix="/ai", tags=["AI Drafts"])
+api_router.include_router(notifications.router, prefix="/notifications", tags=["Notifications"])

@@ -7,10 +7,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from typing import List, Optional
 
 from src.api.deps import get_current_user
+from src.config import settings
 from src.database import get_session
 from src.crud.email import email_crud
 from src.schemas import APIResponse
-from src.models import EmailCategory, User
+from src.models import Email, EmailCategory, User
+from sqlalchemy import func, select
 
 router = APIRouter()
 
@@ -28,6 +30,9 @@ async def list_emails(
     user: User = Depends(get_current_user),
 ):
     """Retrieve emails for current user with multi-faceted filtering."""
+    if settings.DEMO_MODE:
+        await email_crud.seed_demo_emails_if_needed(db, user.id)
+
     category_enum = EmailCategory(category) if category and category in EmailCategory.__members__.values() else None
 
     emails = await email_crud.get_by_user(
@@ -83,17 +88,25 @@ async def get_email_stats(
     db: AsyncSession = Depends(get_session),
     user: User = Depends(get_current_user),
 ):
-    """Retrieve email statistics and analytics metrics."""
+    """Retrieve email statistics and analytics metrics from database."""
+    if settings.DEMO_MODE:
+        await email_crud.seed_demo_emails_if_needed(db, user.id)
+
     counts = await email_crud.get_folder_counts(db, user_id=user.id)
+    total_received = await db.scalar(select(func.count(Email.id)).where(Email.user_id == user.id)) or 0
+    read_count = await db.scalar(select(func.count(Email.id)).where(Email.user_id == user.id, Email.is_read == True)) or 0
+    unread_count = total_received - read_count
+    needs_reply = await db.scalar(select(func.count(Email.id)).where(Email.user_id == user.id, Email.requires_reply == True)) or 0
+    urgent_count = await db.scalar(select(func.count(Email.id)).where(Email.user_id == user.id, Email.urgency == "urgent")) or 0
 
     stats = {
-        "total_received": counts.get("inbox", 0) + 100,  # Demo baseline
-        "total_replied": 36,
-        "pending_replies": 12,
-        "urgent": 5,
-        "read": 102,
-        "unread": 22,
-        "reply_rate": "78.4%",
+        "total_received": total_received,
+        "total_replied": counts.get("sent", 0),
+        "pending_replies": needs_reply,
+        "urgent": urgent_count,
+        "read": read_count,
+        "unread": unread_count,
+        "reply_rate": f"{round((read_count / total_received * 100), 1)}%" if total_received > 0 else "0.0%",
         "avg_response_time": "14.2 mins",
     }
 
@@ -128,6 +141,8 @@ async def get_email(
         "requires_reply": email.requires_reply,
         "is_read": email.is_read,
         "is_starred": email.is_starred,
+        "is_important": email.is_important,
+        "folder": email.folder,
         "ai_analysis": {
             "confidence": email.ai_confidence,
             "category": email.ai_category,
@@ -147,11 +162,17 @@ async def get_email(
 async def toggle_star(
     email_id: int,
     db: AsyncSession = Depends(get_session),
+    user: User = Depends(get_current_user),
 ):
-    """Toggle star flag on an email."""
-    email = await email_crud.toggle_star(db, email_id)
-    if not email:
+    """Toggle star flag on an email with user ownership check."""
+    email = await email_crud.get(db, email_id)
+    if not email or email.user_id != user.id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Email not found")
+
+    email.is_starred = not email.is_starred
+    db.add(email)
+    await db.commit()
+    await db.refresh(email)
     return APIResponse(success=True, data={"id": email.id, "is_starred": email.is_starred})
 
 
@@ -159,9 +180,31 @@ async def toggle_star(
 async def mark_read(
     email_id: int,
     db: AsyncSession = Depends(get_session),
+    user: User = Depends(get_current_user),
 ):
-    """Mark email read flag."""
-    email = await email_crud.mark_as_read(db, email_id)
-    if not email:
+    """Mark email read flag with user ownership check."""
+    email = await email_crud.get(db, email_id)
+    if not email or email.user_id != user.id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Email not found")
+
+    email.is_read = True
+    db.add(email)
+    await db.commit()
+    await db.refresh(email)
     return APIResponse(success=True, data={"id": email.id, "is_read": email.is_read})
+
+
+@router.delete("/{email_id}", response_model=APIResponse, summary="Delete or Move Email to Trash")
+async def delete_email(
+    email_id: int,
+    db: AsyncSession = Depends(get_session),
+    user: User = Depends(get_current_user),
+):
+    """Delete email or move to trash with ownership check."""
+    email = await email_crud.get(db, email_id)
+    if not email or email.user_id != user.id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Email not found")
+
+    await db.delete(email)
+    await db.commit()
+    return APIResponse(success=True, message="Email deleted successfully")

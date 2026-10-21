@@ -108,3 +108,19 @@ async def create_calendar_event(
         data={"id": ev.id, "title": ev.title},
         message="Event added to calendar",
     )
+
+
+@router.delete("/events/{event_id}", response_model=APIResponse, summary="Delete Calendar Event")
+async def delete_calendar_event(
+    event_id: int,
+    db: AsyncSession = Depends(get_session),
+    user: User = Depends(get_current_user),
+):
+    """Delete a calendar event with user ownership check."""
+    ev = await calendar_event_crud.get(db, event_id)
+    if not ev or ev.user_id != user.id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Event not found")
+
+    await calendar_event_crud.delete(db, event_id)
+    await db.commit()
+    return APIResponse(success=True, message="Event deleted successfully")

@@ -131,21 +131,190 @@ class CRUDEmail(CRUDBase):
     async def get_folder_counts(
         self, db: AsyncSession, user_id: int
     ) -> dict:
-        """Get count of emails per folder."""
-        result = await db.execute(
-            select(Email.folder, func.count()).where(Email.user_id == user_id)
-            .group_by(Email.folder)
-        )
-        counts = {row[0]: row[1] for row in result.fetchall()}
-        # Return standard folder counts
+        """Get accurate count of emails per folder/flag."""
+        inbox_c = await db.scalar(select(func.count(Email.id)).where(Email.user_id == user_id, Email.folder == "inbox")) or 0
+        starred_c = await db.scalar(select(func.count(Email.id)).where(Email.user_id == user_id, Email.is_starred == True)) or 0
+        important_c = await db.scalar(select(func.count(Email.id)).where(Email.user_id == user_id, Email.is_important == True)) or 0
+        snoozed_c = await db.scalar(select(func.count(Email.id)).where(Email.user_id == user_id, Email.folder == "snoozed")) or 0
+        sent_c = await db.scalar(select(func.count(Email.id)).where(Email.user_id == user_id, Email.folder == "sent")) or 0
+        drafts_c = await db.scalar(select(func.count(Email.id)).where(Email.user_id == user_id, Email.folder == "drafts")) or 0
         return {
-            "inbox": counts.get("inbox", 0),
-            "starred": counts.get("starred", 0) if "starred" in counts else 0,
-            "important": counts.get("important", 0),
-            "snoozed": counts.get("snoozed", 0),
-            "sent": counts.get("sent", 0),
-            "drafts": counts.get("drafts", 0),
+            "inbox": inbox_c,
+            "starred": starred_c,
+            "important": important_c,
+            "snoozed": snoozed_c,
+            "sent": sent_c,
+            "drafts": drafts_c,
         }
+
+    async def seed_demo_emails_if_needed(self, db: AsyncSession, user_id: int) -> int:
+        """Seed demo emails if user inbox is empty in DEMO_MODE."""
+        count = await db.scalar(select(func.count(Email.id)).where(Email.user_id == user_id)) or 0
+        if count > 0:
+            return 0
+
+        from datetime import datetime, timezone, timedelta
+        from src.models import AIAnalysisSentiment
+
+        now = datetime.now(timezone.utc)
+        demo_items = [
+            {
+                "user_id": user_id,
+                "message_id": f"demo-msg-001-{user_id}",
+                "from_name": "John Smith",
+                "from_email": "john@techcorp.com",
+                "to": "roshan@gmail.com",
+                "subject": "Website Project Inquiry",
+                "preview": "Hi, I want to develop a website for my company. Please share your pricing, timeline and services.",
+                "body": "Hi,\n\nI want to develop a website for my company. Please share your pricing, timeline and the services you offer.\n\nLooking forward to your response.\n\nBest regards,\nJohn",
+                "received_at": now - timedelta(minutes=14),
+                "category": EmailCategory.CLIENT,
+                "urgency": EmailUrgency.HIGH,
+                "requires_reply": True,
+                "is_read": False,
+                "is_starred": True,
+                "is_important": True,
+                "folder": "inbox",
+                "ai_confidence": 95,
+                "ai_category": "Client Inquiry",
+                "ai_priority": "High",
+                "ai_sentiment": AIAnalysisSentiment.NEUTRAL,
+                "ai_key_points": [
+                    "Interested in website development",
+                    "Asking for pricing, timeline and services",
+                    "High business priority new client"
+                ],
+                "ai_extracted_tasks": ["Prepare website pricing proposal", "Send portfolio"],
+                "ai_suggested_reply": "Hi John,\n\nThank you for reaching out. We specialize in modern web development and would love to help you build your company website. Our typical timeline is 2-4 weeks.\n\nCould we schedule a brief 15-minute call this week to discuss your requirements?\n\nBest regards,\nRoshan Kumar",
+            },
+            {
+                "user_id": user_id,
+                "message_id": f"demo-msg-002-{user_id}",
+                "from_name": "ABC College",
+                "from_email": "admin@abccollege.edu",
+                "to": "roshan@gmail.com",
+                "subject": "Project Submission Deadline",
+                "preview": "Dear Students, submit your project report before the deadline to avoid late submission penalties.",
+                "body": "Dear Students,\n\nThis is a reminder that the project submission deadline is October 20, 2026. Please submit your project report before the deadline to avoid late submission penalties.\n\nBest regards,\nAdmin Office",
+                "received_at": now - timedelta(hours=1, minutes=10),
+                "category": EmailCategory.COLLEGE,
+                "urgency": EmailUrgency.URGENT,
+                "requires_reply": False,
+                "is_read": False,
+                "is_starred": False,
+                "is_important": True,
+                "folder": "inbox",
+                "ai_confidence": 92,
+                "ai_category": "College",
+                "ai_priority": "High",
+                "ai_sentiment": AIAnalysisSentiment.NEUTRAL,
+                "ai_key_points": ["Project submission deadline: Oct 20, 2026", "Late penalty applies"],
+                "ai_extracted_tasks": ["Submit project report by Oct 20"],
+                "ai_extracted_deadlines": ["October 20, 2026"],
+            },
+            {
+                "user_id": user_id,
+                "message_id": f"demo-msg-003-{user_id}",
+                "from_name": "Google Security",
+                "from_email": "no-reply@google.com",
+                "to": "roshan@gmail.com",
+                "subject": "Security Alert - New Sign-in",
+                "preview": "A new sign-in was detected on your account from a Windows device in Mumbai.",
+                "body": "Hi Roshan,\n\nA new sign-in was detected on your Google Account from a new Windows device in Mumbai.\n\nIf this was you, you do not need to do anything. If not, please review your account activity.\n\nGoogle Security Team",
+                "received_at": now - timedelta(hours=2, minutes=45),
+                "category": EmailCategory.SECURITY,
+                "urgency": EmailUrgency.HIGH,
+                "requires_reply": False,
+                "is_read": True,
+                "is_starred": False,
+                "is_important": True,
+                "folder": "inbox",
+                "ai_confidence": 88,
+                "ai_category": "Security",
+                "ai_priority": "High",
+                "ai_sentiment": AIAnalysisSentiment.ALERT,
+                "ai_key_points": ["Sign-in from new device in Mumbai", "Verify unauthorized access if not recognized"],
+                "ai_extracted_tasks": ["Verify if sign-in was authorized"],
+            },
+            {
+                "user_id": user_id,
+                "message_id": f"demo-msg-004-{user_id}",
+                "from_name": "Sarah (Engineering)",
+                "from_email": "sarah@myteam.io",
+                "to": "roshan@gmail.com",
+                "subject": "Team Meeting Confirmation",
+                "preview": "The meeting is scheduled for tomorrow at 11 AM via Google Meet. Please confirm your attendance.",
+                "body": "Hi Roshan,\n\nThe team meeting is scheduled for tomorrow at 11:00 AM via Google Meet.\n\nAgenda:\n- Sprint review\n- Q4 planning\n- Product roadmap\n\nPlease let me know if you can make it!\n\nBest,\nSarah",
+                "received_at": now - timedelta(hours=3, minutes=15),
+                "category": EmailCategory.WORK,
+                "urgency": EmailUrgency.MEDIUM,
+                "requires_reply": True,
+                "is_read": True,
+                "is_starred": False,
+                "is_important": True,
+                "folder": "inbox",
+                "ai_confidence": 97,
+                "ai_category": "Work",
+                "ai_priority": "Medium",
+                "ai_sentiment": AIAnalysisSentiment.POSITIVE,
+                "ai_key_points": ["Team meeting tomorrow 11 AM", "Google Meet", "Sprint review + roadmap"],
+                "ai_extracted_tasks": ["Confirm meeting attendance"],
+                "ai_extracted_deadlines": ["Tomorrow, 11:00 AM"],
+                "ai_suggested_reply": "Hi Sarah,\n\nConfirmed, I will be attending the meeting tomorrow at 11:00 AM. Looking forward to the roadmap discussion.\n\nBest,\nRoshan",
+            },
+            {
+                "user_id": user_id,
+                "message_id": f"demo-msg-005-{user_id}",
+                "from_name": "Amazon Orders",
+                "from_email": "orders@amazon.in",
+                "to": "roshan@gmail.com",
+                "subject": "Your Order Has Been Shipped",
+                "preview": "Your order #12345 has been shipped and will be delivered by Oct 15.",
+                "body": "Hello Roshan,\n\nYour package with order ID #12345 has been dispatched and is out for transit.\nEstimated Delivery: October 15, 2026.\n\nThank you for shopping on Amazon.",
+                "received_at": now - timedelta(hours=6),
+                "category": EmailCategory.PROMOTIONS,
+                "urgency": EmailUrgency.LOW,
+                "requires_reply": False,
+                "is_read": True,
+                "is_starred": False,
+                "is_important": False,
+                "folder": "inbox",
+                "ai_confidence": 99,
+                "ai_category": "Promotions",
+                "ai_priority": "Low",
+                "ai_sentiment": AIAnalysisSentiment.POSITIVE,
+                "ai_key_points": ["Order #12345 shipped", "Delivery scheduled for Oct 15"],
+            },
+            {
+                "user_id": user_id,
+                "message_id": f"demo-msg-006-{user_id}",
+                "from_name": "LinkedIn Jobs",
+                "from_email": "jobs-listings@linkedin.com",
+                "to": "roshan@gmail.com",
+                "subject": "New Job Recommendations for You",
+                "preview": "Based on your search history: Senior Full-Stack Engineer, AI Solutions Architect, and more.",
+                "body": "Hi Roshan,\n\nTop opportunities matching your experience:\n1. Senior Full-Stack AI Engineer @ Stripe\n2. Staff Backend Architect @ Anthropic\n3. Lead Frontend Developer @ Vercel\n\nView jobs and apply directly on LinkedIn.",
+                "received_at": now - timedelta(hours=8),
+                "category": EmailCategory.CAREER,
+                "urgency": EmailUrgency.LOW,
+                "requires_reply": False,
+                "is_read": True,
+                "is_starred": False,
+                "is_important": False,
+                "folder": "inbox",
+                "ai_confidence": 91,
+                "ai_category": "Career",
+                "ai_priority": "Low",
+                "ai_sentiment": AIAnalysisSentiment.NEUTRAL,
+                "ai_key_points": ["3 matching tech roles recommended on LinkedIn"],
+            },
+        ]
+
+        for item in demo_items:
+            db_obj = Email(**item)
+            db.add(db_obj)
+        await db.commit()
+        return len(demo_items)
 
     async def _resolve(self, db: AsyncSession, email_or_id) -> Optional[Email]:
         if isinstance(email_or_id, Email):

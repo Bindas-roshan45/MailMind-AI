@@ -84,11 +84,17 @@ async def create_task(
 async def toggle_task_done(
     task_id: int,
     db: AsyncSession = Depends(get_session),
+    user: User = Depends(get_current_user),
 ):
-    """Toggle completed status on a task."""
-    task = await task_crud.toggle_done(db, task_id)
-    if not task:
+    """Toggle completed status on a task with user ownership check."""
+    task = await task_crud.get(db, task_id)
+    if not task or task.user_id != user.id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Task not found")
+
+    task.done = not task.done
+    db.add(task)
+    await db.commit()
+    await db.refresh(task)
     return APIResponse(
         success=True,
         data={"id": task.id, "done": task.done},
@@ -100,9 +106,13 @@ async def toggle_task_done(
 async def delete_task(
     task_id: int,
     db: AsyncSession = Depends(get_session),
+    user: User = Depends(get_current_user),
 ):
-    """Delete a task."""
-    task = await task_crud.delete(db, task_id)
-    if not task:
+    """Delete a task with user ownership check."""
+    task = await task_crud.get(db, task_id)
+    if not task or task.user_id != user.id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Task not found")
+
+    await task_crud.delete(db, task_id)
+    await db.commit()
     return APIResponse(success=True, message="Task deleted successfully")
