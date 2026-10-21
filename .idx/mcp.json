@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "Perplexity": {
+      "command": "/usr/local/bin/node",
+      "args": [
+        "/Users/roshankumar/.perplexity-mcp/start.mjs"
+      ],
+      "env": {}
+    }
+  }
+}

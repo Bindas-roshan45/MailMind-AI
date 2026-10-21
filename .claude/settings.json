@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python3 -m venv /Users/roshankumar/Projects/MailMind AI/backend/.venv)",
+      "Bash(python3 -m venv .venv)"
+    ]
+  }
+}

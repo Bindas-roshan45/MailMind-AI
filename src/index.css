@@ -1,0 +1,120 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ─── Base ──────────────────────────────────────────────────── */
+@layer base {
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: #CBD5E1 transparent;
+  }
+
+  *::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+  *::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  *::-webkit-scrollbar-thumb {
+    background: #CBD5E1;
+    border-radius: 9999px;
+  }
+  *::-webkit-scrollbar-thumb:hover {
+    background: #94A3B8;
+  }
+
+  .dark * {
+    scrollbar-color: #475569 transparent;
+  }
+  .dark *::-webkit-scrollbar-thumb {
+    background: #475569;
+  }
+  .dark *::-webkit-scrollbar-thumb:hover {
+    background: #64748B;
+  }
+
+  html {
+    @apply scroll-smooth;
+  }
+
+  body {
+    @apply font-sans antialiased bg-[#F5F7FC] text-[#1E293B];
+    min-height: 100vh;
+  }
+
+  html.dark body {
+    @apply bg-[#0F172A] text-[#F8FAFC];
+  }
+}
+
+/* ─── Components ────────────────────────────────────────────── */
+@layer components {
+  /* Minimal SaaS Card */
+  .card-white {
+    @apply bg-white dark:bg-[#1E293B] border border-[#E5EAF2] dark:border-[#334155] rounded-xl shadow-card transition-all duration-150;
+  }
+  .card-white-hover {
+    @apply bg-white dark:bg-[#1E293B] border border-[#E5EAF2] dark:border-[#334155] rounded-xl shadow-card hover:shadow-card-hover hover:border-[#D1D9E7] dark:hover:border-[#475569] transition-all duration-150;
+  }
+
+  /* Legacy glass-card alias */
+  .glass-card {
+    @apply bg-white dark:bg-[#1E293B] border border-[#E5EAF2] dark:border-[#334155] rounded-xl shadow-card transition-all duration-150;
+  }
+
+  /* Buttons */
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 px-3.5 py-2 rounded-lg font-medium text-xs sm:text-sm transition-all duration-150 cursor-pointer select-none disabled:opacity-50 disabled:cursor-not-allowed outline-none focus-visible:ring-2 focus-visible:ring-[#4169E1]/30;
+  }
+
+  .btn-primary {
+    @apply btn bg-[#4169E1] text-white hover:bg-[#3457C8] active:scale-[0.98] shadow-sm;
+  }
+
+  .btn-secondary {
+    @apply btn bg-white dark:bg-[#1E293B] text-[#1E293B] dark:text-[#F8FAFC] border border-[#E5EAF2] dark:border-[#334155] hover:bg-[#F8FAFC] dark:hover:bg-[#28384E] active:scale-[0.98];
+  }
+
+  .btn-ghost {
+    @apply btn bg-transparent text-[#7B8497] hover:text-[#1E293B] dark:text-[#94A3B8] dark:hover:text-[#F8FAFC] hover:bg-[#E5EAF2]/60 dark:hover:bg-[#334155]/60 active:scale-[0.98];
+  }
+
+  .btn-accent {
+    @apply btn bg-[#E8EEFF] text-[#4169E1] dark:bg-[#4169E1]/20 dark:text-[#819CF8] hover:bg-[#DCE6FF] dark:hover:bg-[#4169E1]/30;
+  }
+
+  /* Form Input */
+  .input-minimal {
+    @apply bg-white dark:bg-[#1E293B] border border-[#E5EAF2] dark:border-[#334155] rounded-lg px-3 py-2 text-sm text-[#1E293B] dark:text-[#F8FAFC] placeholder-[#7B8497] dark:placeholder-[#64748B] outline-none focus:border-[#4169E1] focus:ring-2 focus:ring-[#4169E1]/15 transition-all duration-150 w-full;
+  }
+
+  /* Soft minimal badge */
+  .badge-soft {
+    @apply inline-flex items-center px-2 py-0.5 rounded-md text-[11px] font-medium tracking-wide;
+  }
+
+  /* Sidebar item */
+  .sidebar-item {
+    @apply flex items-center gap-3 px-3 py-2 rounded-lg text-xs sm:text-sm font-medium text-[#94A3B8] hover:text-white hover:bg-[#1F314F] transition-all duration-150 cursor-pointer select-none;
+  }
+  .sidebar-item.active {
+    @apply text-white bg-[#4169E1] shadow-sm;
+  }
+
+  /* Tabs */
+  .tab-item {
+    @apply flex items-center gap-2 px-3 py-2 text-xs sm:text-sm font-medium border-b-2 border-transparent text-[#7B8497] dark:text-[#94A3B8] hover:text-[#1E293B] dark:hover:text-[#F8FAFC] transition-colors cursor-pointer;
+  }
+  .tab-item.active {
+    @apply border-[#4169E1] text-[#4169E1] dark:text-[#819CF8];
+  }
+}
+
+/* ─── Utilities ─────────────────────────────────────────────── */
+@layer utilities {
+  .no-scrollbar::-webkit-scrollbar { display: none; }
+  .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+}
