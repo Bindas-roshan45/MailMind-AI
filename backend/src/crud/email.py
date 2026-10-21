@@ -311,6 +311,10 @@ class CRUDEmail(CRUDBase):
         ]
 
         for item in demo_items:
+            if "created_at" not in item:
+                item["created_at"] = now
+            if "updated_at" not in item:
+                item["updated_at"] = now
             db_obj = Email(**item)
             db.add(db_obj)
         await db.commit()

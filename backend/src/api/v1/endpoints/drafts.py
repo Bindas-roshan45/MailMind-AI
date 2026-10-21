@@ -90,31 +90,46 @@ async def generate_draft(
         tone=payload.tone,
     )
 
-    # Save draft in database (is_approved=False by default)
-    draft = AIReplyDraft(
-        email_id=email_id,
-        user_id=user.id,
-        tone=payload.tone,
-        language=payload.language,
-        content=reply_content,
-        is_approved=False,
-        is_sent=False,
-    )
-    db.add(draft)
-    await db.commit()
-    await db.refresh(draft)
+    # Save draft in database if associated with an email (is_approved=False by default)
+    if email_id is not None:
+        draft = AIReplyDraft(
+            email_id=email_id,
+            user_id=user.id,
+            tone=payload.tone,
+            language=payload.language,
+            content=reply_content,
+            is_approved=False,
+            is_sent=False,
+        )
+        db.add(draft)
+        await db.commit()
+        await db.refresh(draft)
 
+        return APIResponse(
+            success=True,
+            data={
+                "draft_id": draft.id,
+                "email_id": draft.email_id,
+                "tone": draft.tone,
+                "content": draft.content,
+                "is_approved": draft.is_approved,
+                "is_sent": draft.is_sent,
+            },
+            message="AI reply draft generated successfully and saved for approval.",
+        )
+
+    # Standalone draft (e.g., composing a new message)
     return APIResponse(
         success=True,
         data={
-            "draft_id": draft.id,
-            "email_id": draft.email_id,
-            "tone": draft.tone,
-            "content": draft.content,
-            "is_approved": draft.is_approved,
-            "is_sent": draft.is_sent,
+            "draft_id": None,
+            "email_id": None,
+            "tone": payload.tone,
+            "content": reply_content,
+            "is_approved": False,
+            "is_sent": False,
         },
-        message="AI reply draft generated successfully and saved for approval.",
+        message="AI email draft generated successfully.",
     )
 
 

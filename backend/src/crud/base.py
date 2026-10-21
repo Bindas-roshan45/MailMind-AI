@@ -2,6 +2,7 @@
 Base CRUD operations for all models.
 Provides standard create, read, update, delete operations.
 """
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Type
 
 from sqlalchemy import select, update, delete
@@ -49,6 +50,11 @@ class CRUDBase:
             elif isinstance(obj_in, dict):
                 data.update(obj_in)
         data.update(kwargs)
+        now = datetime.now(timezone.utc)
+        if hasattr(self.model, "created_at") and "created_at" not in data:
+            data["created_at"] = now
+        if hasattr(self.model, "updated_at") and "updated_at" not in data:
+            data["updated_at"] = now
         db_obj = self.model(**data)
         db.add(db_obj)
         await db.flush()
@@ -72,6 +78,8 @@ class CRUDBase:
             elif isinstance(obj_in, dict):
                 update_data.update(obj_in)
         update_data.update(kwargs)
+        if hasattr(self.model, "updated_at") and "updated_at" not in update_data:
+            update_data["updated_at"] = datetime.now(timezone.utc)
 
         for field, value in update_data.items():
             if hasattr(db_obj, field):

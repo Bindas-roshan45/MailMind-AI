@@ -225,3 +225,38 @@ async def test_unapprove_then_reapprove_draft(client: AsyncClient, db_session: A
     # Re-approve
     r = await client.post(f"/api/v1/ai/drafts/{draft_id}/approve", json={"is_approved": True})
     assert r.json()["data"]["is_approved"] is True
+
+
+@pytest.mark.asyncio
+async def test_generate_draft_standalone_without_email_id(client: AsyncClient):
+    """Regression test: generating a draft without email_id (ComposeModal) succeeds without 500."""
+    res = await client.post("/api/v1/ai/generate-draft", json={
+        "subject": "Website Project Inquiry",
+        "body": "Hi, I want a quote for a website.",
+        "prompt": "Offer a 2-4 week timeline",
+        "tone": "professional",
+    })
+    assert res.status_code == 201
+    data = res.json()["data"]
+    assert data["draft_id"] is None
+    assert data["email_id"] is None
+    assert "content" in data and len(data["content"]) > 0
+    assert data["is_approved"] is False
+    assert data["is_sent"] is False
+
+
+@pytest.mark.asyncio
+async def test_demo_token_issue_and_user_creation(client: AsyncClient):
+    """Regression test: demo token endpoint succeeds and user timestamps/passwords are valid."""
+    res = await client.post("/api/v1/auth/demo-token")
+    assert res.status_code == 200
+    token_data = res.json()
+    assert "access_token" in token_data
+
+    # Use token to call /me
+    me_res = await client.get(
+        "/api/v1/auth/me",
+        headers={"Authorization": f"Bearer {token_data['access_token']}"},
+    )
+    assert me_res.status_code == 200
+    assert me_res.json()["data"]["email"] == "roshan@gmail.com"

@@ -58,6 +58,22 @@ async def init_db() -> None:
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
 
+        def sync_sqlite_columns(connection):
+            try:
+                # Direct check on raw SQLite connection
+                raw_conn = connection.connection.dbapi_connection
+                cursor = raw_conn.cursor()
+                cursor.execute("PRAGMA table_info(users)")
+                cols = {row[1] for row in cursor.fetchall()}
+                if cols and "hashed_password" not in cols:
+                    cursor.execute("ALTER TABLE users ADD COLUMN hashed_password VARCHAR(255)")
+                    raw_conn.commit()
+            except Exception:
+                pass
+
+        if "sqlite" in str(settings.DATABASE_URL):
+            await conn.run_sync(sync_sqlite_columns)
+
 
 async def close_db() -> None:
     """Dispose of the engine pool."""
