@@ -53,8 +53,9 @@ export default function CalendarPage() {
     e.preventDefault();
     if (!newTitle.trim()) return;
 
+    const tempId = `ev-${Date.now()}`;
     const newEv = {
-      id: `ev-${Date.now()}`,
+      id: tempId,
       title: newTitle.trim(),
       date: selectedDay,
       time: newTime || '12:00 PM',
