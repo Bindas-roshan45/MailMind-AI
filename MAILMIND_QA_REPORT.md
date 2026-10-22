@@ -227,10 +227,24 @@ ALL END-TO-END WORKFLOWS VERIFIED SUCCESSFULLY!
 | **FastAPI Backend** | **ACTIVE** | Serving on port `8000`. Database connected, all endpoints responsive. |
 | **Vite Frontend** | **ACTIVE** | Serving on port `5173`. Production build and lint passing. |
 | **Gmail OAuth 2.0** | **BLOCKED** | `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` are unset in `.env`. System operates safely in Demo Mode. To unblock: provide real Google Cloud OAuth credentials and configure authorized redirect URI. |
-| **Browser Subagent** | **BLOCKED (Sandbox)** | The browser subagent encountered an external CDN 404 while trying to install Playwright binary packages within the sandbox container. Live API verification was executed directly against the active application processes instead. |
+| **Local Playwright Test Environment** | **NOT INSTALLED** | Verified: Playwright is not installed in `package.json`, `node_modules`, or Python `.venv`. Local browsers available: Google Chrome (`/Applications/Google Chrome.app`), Microsoft Edge (`/Applications/Microsoft Edge.app`), Safari (`/Applications/Safari.app`). Smallest safe setup: `npm install -D playwright` using the existing local Chrome/Edge channel to avoid heavy external binary downloads. |
 
 ---
 
-## 7. Conclusion
+## 7. Interactive Browser Testing Status
 
-MailMind AI has been verified to be stable, responsive, and functional in its current running state. All previously reported server 500 errors and newly discovered calendar schema bugs have been resolved with minimal, surgical code changes.
+- **Status:** **PENDING LOCAL PLAYWRIGHT SETUP / MANUAL VERIFICATION**
+- **Verification Rule:** Browser automation testing is not claimed as complete while the automation runner package is uninstalled.
+- **Local Application Readiness:**
+  - Frontend is live and responding at `http://localhost:5173`.
+  - Backend is live and responding at `http://127.0.0.1:8000`.
+  - An established browser session is already connected on port 5173 (`localhost:51778` -> `localhost:5173`).
+- **Required Action to Automate:**
+  - Execute `npm install -D playwright` and run an automated script configured to use `/Applications/Google Chrome.app` or `channel: "chrome"`.
+
+---
+
+## 8. Conclusion
+
+MailMind AI backend and frontend integrations are verified to be fully operational and passing 53 unit/integration tests and 29 live API workflow tests. Interactive browser testing is ready to be executed once the lightweight local Playwright runner is initialized.
+
