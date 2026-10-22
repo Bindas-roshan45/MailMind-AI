@@ -70,12 +70,16 @@ export default function CalendarPage() {
     try {
       const startTime = new Date(2026, 9, selectedDay, 10, 0, 0).toISOString();
       const endTime = new Date(2026, 9, selectedDay, 11, 0, 0).toISOString();
-      await api.calendar.create({
+      const res = await api.calendar.create({
         title: newEv.title,
         start_time: startTime,
         end_time: endTime,
         location: newCategory === 'Client' ? 'Zoom Call' : 'Google Meet',
+        category: newCategory === 'Personal' ? 'Personal' : 'Work',
       });
+      if (res?.data?.id) {
+        setEvents(prev => prev.map(e => e.id === tempId ? { ...e, id: res.data.id } : e));
+      }
     } catch {
       // Local fallback active
     }

@@ -248,7 +248,7 @@ class CalendarEventBase(BaseSchema):
     start_time: datetime
     end_time: datetime
     all_day: bool = False
-    category: EmailCategory
+    category: EmailCategory = EmailCategory.WORK
     event_type: Optional[str] = None
     location: Optional[str] = None
     meeting_url: Optional[str] = None
