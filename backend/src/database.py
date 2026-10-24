@@ -67,7 +67,30 @@ async def init_db() -> None:
                 cols = {row[1] for row in cursor.fetchall()}
                 if cols and "hashed_password" not in cols:
                     cursor.execute("ALTER TABLE users ADD COLUMN hashed_password VARCHAR(255)")
-                    raw_conn.commit()
+
+                # Check user_preferences table
+                cursor.execute("PRAGMA table_info(user_preferences)")
+                pref_cols = {row[1] for row in cursor.fetchall()}
+                if pref_cols:
+                    new_cols = {
+                        "automation_paused": "BOOLEAN DEFAULT 0",
+                        "automation_mode": "VARCHAR(50) DEFAULT 'draft_only'",
+                        "daily_reply_limit": "INTEGER DEFAULT 20",
+                        "min_confidence_score": "INTEGER DEFAULT 85",
+                        "sender_allowlist": "JSON",
+                        "sender_blocklist": "JSON",
+                        "job_title": "VARCHAR(255)",
+                        "company": "VARCHAR(255)",
+                        "timezone": "VARCHAR(100) DEFAULT 'UTC'",
+                        "custom_instructions": "TEXT",
+                    }
+                    for col_name, col_type in new_cols.items():
+                        if col_name not in pref_cols:
+                            try:
+                                cursor.execute(f"ALTER TABLE user_preferences ADD COLUMN {col_name} {col_type}")
+                            except Exception:
+                                pass
+                raw_conn.commit()
             except Exception:
                 pass
 

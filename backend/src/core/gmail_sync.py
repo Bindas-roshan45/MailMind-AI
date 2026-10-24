@@ -231,6 +231,7 @@ async def sync_user_gmail_inbox(
         }
 
     new_messages_count = 0
+    newly_added_emails = []
 
     for msg_meta in messages:
         msg_id = msg_meta.get("id")
@@ -282,11 +283,33 @@ async def sync_user_gmail_inbox(
             ai_suggested_reply=analysis["ai_suggested_reply"],
         )
         db.add(email_row)
+        newly_added_emails.append(email_row)
         new_messages_count += 1
 
     account.last_sync = datetime.now(timezone.utc)
     db.add(account)
     await db.commit()
+
+    # Run automated decision engine for newly synced emails if enabled
+    if newly_added_emails:
+        from src.core.automation_engine import automation_engine
+        from src.models import UserPreferences
+        pref_res = await db.execute(
+            select(UserPreferences).where(UserPreferences.user_id == user.id)
+        )
+        user_pref = pref_res.scalar_one_or_none()
+        if user_pref and not user_pref.automation_paused:
+            for new_em in newly_added_emails:
+                try:
+                    await automation_engine.process_and_record(
+                        db=db,
+                        user=user,
+                        email=new_em,
+                        gmail_client=client,
+                        preferences=user_pref,
+                    )
+                except Exception as auto_err:
+                    logger.warning("Automation error on email %s: %s", new_em.id, auto_err)
 
     logger.info("Synced %d new Gmail messages for user %s", new_messages_count, user.id)
     return {

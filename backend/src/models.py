@@ -104,6 +104,9 @@ class User(Base):
     preferences: Mapped[Optional["UserPreferences"]] = relationship(
         "UserPreferences", back_populates="user", uselist=False, cascade="all, delete-orphan"
     )
+    signatures: Mapped[List["EmailSignature"]] = relationship(
+        "EmailSignature", back_populates="user", cascade="all, delete-orphan"
+    )
 
 
 class ConnectedAccount(Base):
@@ -293,6 +296,20 @@ class UserPreferences(Base):
     daily_digest_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
     email_notifications_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
 
+    # Automation & Safety Guardrails
+    automation_paused: Mapped[bool] = mapped_column(Boolean, default=False)
+    automation_mode: Mapped[str] = mapped_column(String(50), default="draft_only")  # draft_only, approval_required, auto_reply
+    daily_reply_limit: Mapped[int] = mapped_column(Integer, default=20)
+    min_confidence_score: Mapped[int] = mapped_column(Integer, default=85)
+    sender_allowlist: Mapped[Optional[List[str]]] = mapped_column(JSON, nullable=True)
+    sender_blocklist: Mapped[Optional[List[str]]] = mapped_column(JSON, nullable=True)
+
+    # Personal Profile & Custom Instructions
+    job_title: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    company: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    timezone: Mapped[str] = mapped_column(String(100), default="UTC")
+    custom_instructions: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
     # Timestamps
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, server_default=func.now())
     updated_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now, server_default=func.now(), nullable=True)
@@ -369,3 +386,48 @@ class AIReplyDraft(Base):
     # Relationships
     user: Mapped["User"] = relationship("User")
     email: Mapped["Email"] = relationship("Email")
+
+
+class EmailSignature(Base):
+    __tablename__ = "email_signatures"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    user_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id"), nullable=False)
+
+    name: Mapped[str] = mapped_column(String(255), nullable=False)  # e.g. "Work Default", "Mobile"
+    sender_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    job_title: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    company: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    sign_off: Mapped[str] = mapped_column(String(100), default="Best regards")
+    custom_sign_off: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    phone: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    content_html: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    content_text: Mapped[str] = mapped_column(Text, nullable=False)
+
+    is_default_new: Mapped[bool] = mapped_column(Boolean, default=False)
+    is_default_reply: Mapped[bool] = mapped_column(Boolean, default=False)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, server_default=func.now())
+    updated_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now, server_default=func.now(), nullable=True)
+
+    # Relationships
+    user: Mapped["User"] = relationship("User", back_populates="signatures")
+
+
+class ProcessedMessageLog(Base):
+    __tablename__ = "processed_message_logs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    user_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id"), nullable=False)
+    message_id: Mapped[str] = mapped_column(String(255), index=True, nullable=False)
+    thread_id: Mapped[Optional[str]] = mapped_column(String(255), index=True, nullable=True)
+
+    action_taken: Mapped[str] = mapped_column(String(50), nullable=False)  # DRAFT_CREATED, AUTO_REPLIED, SKIPPED, BLOCKED_SENSITIVE, ERROR
+    rule_id: Mapped[Optional[int]] = mapped_column(Integer, ForeignKey("auto_reply_rules.id"), nullable=True)
+    reason: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    reply_message_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, server_default=func.now())
+
+    # Relationships
+    user: Mapped["User"] = relationship("User")

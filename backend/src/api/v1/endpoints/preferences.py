@@ -32,8 +32,20 @@ async def get_preferences(
         "auto_draft_enabled": pref.auto_draft_enabled,
         "phishing_shield_enabled": pref.phishing_shield_enabled,
         "ai_confidence_threshold": pref.ai_confidence_threshold,
+        "auto_sync_enabled": pref.auto_sync_enabled,
+        "sync_interval_minutes": pref.sync_interval_minutes,
         "push_notifications_enabled": pref.push_notifications_enabled,
         "email_notifications_enabled": pref.email_notifications_enabled,
+        "automation_paused": pref.automation_paused,
+        "automation_mode": pref.automation_mode,
+        "daily_reply_limit": pref.daily_reply_limit,
+        "min_confidence_score": pref.min_confidence_score,
+        "sender_allowlist": pref.sender_allowlist or [],
+        "sender_blocklist": pref.sender_blocklist or [],
+        "job_title": pref.job_title,
+        "company": pref.company,
+        "timezone": pref.timezone,
+        "custom_instructions": pref.custom_instructions,
     }
 
     return APIResponse(success=True, data=data, message="Preferences retrieved")
@@ -53,12 +65,32 @@ async def update_preferences(
     update_dict = update_in.model_dump(exclude_unset=True)
     updated = await user_preferences_crud.update(db, db_obj=pref, **update_dict)
 
+    data = {
+        "theme": updated.theme,
+        "layout_density": updated.layout_density,
+        "ai_model": updated.ai_model,
+        "default_reply_tone": updated.default_reply_tone,
+        "auto_draft_enabled": updated.auto_draft_enabled,
+        "phishing_shield_enabled": updated.phishing_shield_enabled,
+        "ai_confidence_threshold": updated.ai_confidence_threshold,
+        "auto_sync_enabled": updated.auto_sync_enabled,
+        "sync_interval_minutes": updated.sync_interval_minutes,
+        "push_notifications_enabled": updated.push_notifications_enabled,
+        "email_notifications_enabled": updated.email_notifications_enabled,
+        "automation_paused": updated.automation_paused,
+        "automation_mode": updated.automation_mode,
+        "daily_reply_limit": updated.daily_reply_limit,
+        "min_confidence_score": updated.min_confidence_score,
+        "sender_allowlist": updated.sender_allowlist or [],
+        "sender_blocklist": updated.sender_blocklist or [],
+        "job_title": updated.job_title,
+        "company": updated.company,
+        "timezone": updated.timezone,
+        "custom_instructions": updated.custom_instructions,
+    }
+
     return APIResponse(
         success=True,
-        data={
-            "theme": updated.theme,
-            "ai_model": updated.ai_model,
-            "auto_draft_enabled": updated.auto_draft_enabled,
-        },
+        data=data,
         message="Preferences updated successfully",
     )

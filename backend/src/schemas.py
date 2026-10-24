@@ -334,6 +334,17 @@ class UserPreferencesBase(BaseSchema):
     sound_alerts_enabled: bool = True
     daily_digest_enabled: bool = False
     email_notifications_enabled: bool = True
+    # Automation & Personalization
+    automation_paused: bool = False
+    automation_mode: str = "draft_only"
+    daily_reply_limit: int = 20
+    min_confidence_score: int = 85
+    sender_allowlist: Optional[List[str]] = None
+    sender_blocklist: Optional[List[str]] = None
+    job_title: Optional[str] = None
+    company: Optional[str] = None
+    timezone: str = "UTC"
+    custom_instructions: Optional[str] = None
 
 
 class UserPreferencesCreate(UserPreferencesBase):
@@ -354,6 +365,17 @@ class UserPreferencesUpdate(BaseSchema):
     sound_alerts_enabled: Optional[bool] = None
     daily_digest_enabled: Optional[bool] = None
     email_notifications_enabled: Optional[bool] = None
+    # Automation & Personalization updates
+    automation_paused: Optional[bool] = None
+    automation_mode: Optional[str] = None
+    daily_reply_limit: Optional[int] = None
+    min_confidence_score: Optional[int] = None
+    sender_allowlist: Optional[List[str]] = None
+    sender_blocklist: Optional[List[str]] = None
+    job_title: Optional[str] = None
+    company: Optional[str] = None
+    timezone: Optional[str] = None
+    custom_instructions: Optional[str] = None
 
 
 class UserPreferencesInDBBase(UserPreferencesBase):

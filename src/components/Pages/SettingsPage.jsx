@@ -1,10 +1,12 @@
 import { useState } from 'react';
 import {
-  Settings, Mail, Bot, Bell, Moon, Sun, RefreshCw, Save, ArrowLeft, ExternalLink, ShieldAlert,
+  Settings, Mail, Bot, Bell, Moon, Sun, RefreshCw, Save, ArrowLeft, ExternalLink, ShieldAlert, PenTool,
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { api } from '../../services/api';
 import toast from 'react-hot-toast';
+import SignatureSettings from '../Settings/SignatureSettings';
+import AutomationSettings from '../Settings/AutomationSettings';
 
 export default function SettingsPage() {
   const { user, theme, toggleTheme, setCurrentPage, preferences, updatePreferences, integrationStatus, refreshInitialData } = useApp();
@@ -88,6 +90,8 @@ export default function SettingsPage() {
       <div className="flex items-center gap-2 border-b border-[#E5EAF2] dark:border-[#334155] pb-2 overflow-x-auto no-scrollbar">
         {[
           { id: 'general',       label: 'General & Appearance', icon: Settings },
+          { id: 'signatures',    label: 'Signatures & Profile', icon: PenTool },
+          { id: 'automation',    label: 'Auto-Reply & Safety',  icon: ShieldAlert },
           { id: 'ai',            label: 'AI & Reply Engine',     icon: Bot },
           { id: 'gmail',         label: 'Gmail & Sync',          icon: Mail },
           { id: 'notifications', label: 'Notifications',         icon: Bell },
@@ -389,6 +393,14 @@ export default function SettingsPage() {
               </div>
             </div>
           </div>
+        )}
+
+        {activeTab === 'signatures' && (
+          <SignatureSettings />
+        )}
+
+        {activeTab === 'automation' && (
+          <AutomationSettings />
         )}
       </div>
     </div>

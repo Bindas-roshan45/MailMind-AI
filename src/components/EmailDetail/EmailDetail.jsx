@@ -4,12 +4,13 @@ import {
   Archive, Clock, RotateCcw, Send, Save,
   MessageSquare, Paperclip, GitBranch,
   Lightbulb, CheckCircle2, AlertCircle, TrendingUp,
-  Globe, ShrinkIcon, Expand, Sparkles, Check, Plus, ArrowLeft, X,
+  Globe, ShrinkIcon, Expand, Sparkles, Check, Plus, ArrowLeft, X, ShieldAlert,
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { Avatar, CategoryBadge } from '../ui';
 import api from '../../services/api';
 import toast from 'react-hot-toast';
+import SensitiveApprovalModal from '../Modals/SensitiveApprovalModal';
 
 // ─── AI Analysis Panel ──────────────────────────────────────
 function AIAnalysisCard({ analysis }) {
@@ -81,6 +82,28 @@ function AIReplyPanel({ email }) {
   const [sent, setSent]             = useState(false);
   const [error, setError]           = useState(null);
   const [aiMeta, setAiMeta]         = useState(null);
+  const [isApprovalModalOpen, setIsApprovalModalOpen] = useState(false);
+
+  const isSensitive = Boolean(
+    email?.category === 'Finance' ||
+    email?.category === 'Security' ||
+    email?.ai_sentiment === 'Alert' ||
+    email?.ai_suspicious_flag === true ||
+    /wire|bank|routing|lawsuit|attorney|subpoena|password|refund|complaint/i.test(
+      `${email?.subject || ''} ${email?.body || email?.preview || ''}`
+    )
+  );
+
+  const sensitivityReason =
+    email?.category === 'Finance'
+      ? 'Financial matter detected (wire / invoice / banking)'
+      : email?.category === 'Security' || email?.ai_suspicious_flag
+      ? 'Security alert or credential reset topic'
+      : /lawsuit|attorney|subpoena/i.test(`${email?.subject || ''} ${email?.body || ''}`)
+      ? 'Legal matter requiring human review'
+      : /complaint|refund|unacceptable/i.test(`${email?.subject || ''} ${email?.body || ''}`)
+      ? 'Customer complaint / escalation requires manual approval'
+      : 'Sensitive topic detected under safety guardrails';
 
   const tones = ['Professional', 'Friendly', 'Formal', 'Short'];
   const langs = ['English', 'Hindi', 'Hinglish'];
@@ -191,6 +214,13 @@ function AIReplyPanel({ email }) {
       toast.error('Reply text cannot be empty');
       return;
     }
+
+    // Phase 3 Safety Guardrail: Sensitive emails require the approval modal flow
+    if (isSensitive) {
+      setIsApprovalModalOpen(true);
+      return;
+    }
+
     setSending(true);
     try {
       await sendEmail({
@@ -307,6 +337,23 @@ function AIReplyPanel({ email }) {
           <span className="text-[10px] text-slate-500 dark:text-slate-400 capitalize">
             {aiMeta.tone} • {aiMeta.language}
           </span>
+        </div>
+      )}
+
+      {/* Sensitive Email Safety Banner */}
+      {isSensitive && (
+        <div className="px-4 py-2 bg-amber-50 dark:bg-amber-950/40 border-b border-amber-200 dark:border-amber-800/50 flex items-center justify-between text-xs text-amber-800 dark:text-amber-200">
+          <div className="flex items-center gap-2">
+            <ShieldAlert className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0" />
+            <span className="font-semibold">{sensitivityReason}</span>
+          </div>
+          <button
+            type="button"
+            onClick={() => setIsApprovalModalOpen(true)}
+            className="text-[11px] font-bold underline hover:text-amber-950 dark:hover:text-amber-100"
+          >
+            Review & Approve
+          </button>
         </div>
       )}
 
@@ -444,6 +491,21 @@ function AIReplyPanel({ email }) {
           </button>
         </div>
       </div>
+
+      {/* Sensitive Email Approval Modal */}
+      <SensitiveApprovalModal
+        isOpen={isApprovalModalOpen}
+        onClose={() => setIsApprovalModalOpen(false)}
+        email={email}
+        initialDraft={reply}
+        sensitivityReason={sensitivityReason}
+        sendEmailFn={sendEmail}
+        onSendSuccess={(approvedText) => {
+          setReply(approvedText);
+          setSent(true);
+          setTimeout(() => setSent(false), 3000);
+        }}
+      />
     </div>
   );
 }

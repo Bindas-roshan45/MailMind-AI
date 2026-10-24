@@ -116,3 +116,115 @@ async def toggle_rule(
         data={"id": rule.id, "is_active": rule.is_active},
         message=f"Rule {'enabled' if rule.is_active else 'paused'}",
     )
+
+
+@router.delete("/rules/{rule_id}", response_model=APIResponse, summary="Delete Auto-Reply Rule")
+async def delete_rule(
+    rule_id: int,
+    db: AsyncSession = Depends(get_session),
+    user: User = Depends(get_current_user),
+):
+    """Delete an auto-reply rule."""
+    result = await db.execute(
+        select(AutoReplyRule).where(
+            AutoReplyRule.id == rule_id, AutoReplyRule.user_id == user.id
+        )
+    )
+    rule = result.scalar_one_or_none()
+    if not rule:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Rule not found")
+
+    await db.delete(rule)
+    await db.commit()
+    return APIResponse(success=True, message="Rule deleted successfully")
+
+
+from pydantic import BaseModel
+
+class PauseTogglePayload(BaseModel):
+    paused: bool
+
+
+@router.post("/pause", response_model=APIResponse, summary="Global Automation Pause Switch")
+async def toggle_global_pause(
+    payload: PauseTogglePayload,
+    db: AsyncSession = Depends(get_session),
+    user: User = Depends(get_current_user),
+):
+    """Immediate global pause switch for all auto-replies and automation."""
+    from src.models import UserPreferences
+    pref_res = await db.execute(
+        select(UserPreferences).where(UserPreferences.user_id == user.id)
+    )
+    pref = pref_res.scalar_one_or_none()
+    if not pref:
+        pref = UserPreferences(user_id=user.id, automation_paused=payload.paused)
+        db.add(pref)
+    else:
+        pref.automation_paused = payload.paused
+        db.add(pref)
+
+    await db.commit()
+    return APIResponse(
+        success=True,
+        message=f"Automation {'paused' if payload.paused else 'resumed'}",
+        data={"automation_paused": payload.paused},
+    )
+
+
+@router.get("/logs", response_model=APIResponse, summary="Recent Automation Activity Logs")
+async def get_automation_logs(
+    limit: int = 30,
+    db: AsyncSession = Depends(get_session),
+    user: User = Depends(get_current_user),
+):
+    """Retrieve processed message logs and automation decision history."""
+    from src.models import ProcessedMessageLog
+    from sqlalchemy import desc
+
+    result = await db.execute(
+        select(ProcessedMessageLog)
+        .where(ProcessedMessageLog.user_id == user.id)
+        .order_by(desc(ProcessedMessageLog.created_at))
+        .limit(limit)
+    )
+    logs = result.scalars().all()
+    items = [
+        {
+            "id": l.id,
+            "message_id": l.message_id,
+            "thread_id": l.thread_id,
+            "action_taken": l.action_taken,
+            "reason": l.reason,
+            "rule_id": l.rule_id,
+            "created_at": l.created_at.isoformat() if l.created_at else None,
+        }
+        for l in logs
+    ]
+    return APIResponse(success=True, data=items, message="Automation logs retrieved")
+
+
+@router.post("/evaluate/{email_id}", response_model=APIResponse, summary="Evaluate/Preview Automation for Email")
+async def evaluate_email_for_automation(
+    email_id: int,
+    db: AsyncSession = Depends(get_session),
+    user: User = Depends(get_current_user),
+):
+    """Preview what the automation engine would do on an email without sending or mutating."""
+    from src.models import Email, UserPreferences
+    from src.core.automation_engine import automation_engine
+
+    email_res = await db.execute(
+        select(Email).where(Email.id == email_id, Email.user_id == user.id)
+    )
+    email = email_res.scalar_one_or_none()
+    if not email:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Email not found")
+
+    pref_res = await db.execute(
+        select(UserPreferences).where(UserPreferences.user_id == user.id)
+    )
+    pref = pref_res.scalar_one_or_none()
+
+    decision = await automation_engine.evaluate_email_for_automation(db, user, email, pref)
+    return APIResponse(success=True, data=decision.to_dict(), message="Evaluation completed")

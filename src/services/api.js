@@ -168,6 +168,34 @@ export const api = {
       request('/preferences', { method: 'PUT', body: JSON.stringify(payload) }),
   },
 
+  // ── Signatures ──
+  signatures: {
+    list: () => request('/signatures'),
+    create: (payload) =>
+      request('/signatures', { method: 'POST', body: JSON.stringify(payload) }),
+    update: (id, payload) =>
+      request(`/signatures/${id}`, { method: 'PUT', body: JSON.stringify(payload) }),
+    delete: (id) =>
+      request(`/signatures/${id}`, { method: 'DELETE' }),
+  },
+
+  // ── Automation & Rules ──
+  automation: {
+    listRules: () => request('/auto-reply/rules'),
+    createRule: (payload) =>
+      request('/auto-reply/rules', { method: 'POST', body: JSON.stringify(payload) }),
+    toggleRule: (id) =>
+      request(`/auto-reply/rules/${id}/toggle`, { method: 'PATCH' }),
+    deleteRule: (id) =>
+      request(`/auto-reply/rules/${id}`, { method: 'DELETE' }),
+    togglePause: (paused) =>
+      request('/auto-reply/pause', { method: 'POST', body: JSON.stringify({ paused }) }),
+    getLogs: (limit = 30) =>
+      request(`/auto-reply/logs?limit=${limit}`),
+    evaluate: (emailId) =>
+      request(`/auto-reply/evaluate/${emailId}`, { method: 'POST' }),
+  },
+
   // ── Health Check ──
   health: {
     check: () => request('/health'),
