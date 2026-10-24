@@ -34,8 +34,11 @@ export function AppProvider({ children }) {
   });
 
   const [loading, setLoading] = useState(true);
+  const [syncing, setSyncing] = useState(false);
   const [isBackendConnected, setIsBackendConnected] = useState(false);
   const [isMockData, setIsMockData] = useState(true);
+  const [currentThread, setCurrentThread] = useState(null);
+  const [loadingThread, setLoadingThread] = useState(false);
 
   // Sync theme with DOM and localStorage
   useEffect(() => {
@@ -57,29 +60,66 @@ export function AppProvider({ children }) {
   const loadInitialData = useCallback(async () => {
     setLoading(true);
     try {
-      // 1. Authenticate / Fetch Profile
-      const userRes = await api.auth.getMe().catch(() => null);
+      // 0. Ensure Demo Token if no token present in local storage
+      if (!localStorage.getItem('mailmind_token')) {
+        const tokenRes = await api.auth.getDemoToken().catch(() => null);
+        if (tokenRes?.access_token) {
+          localStorage.setItem('mailmind_token', tokenRes.access_token);
+        }
+      }
+
+      // 1. Authenticate & Check Integration Status
+      const [userRes, statusRes, prefRes] = await Promise.all([
+        api.auth.getMe().catch(() => null),
+        api.auth.getGoogleStatus().catch(() => null),
+        api.preferences.get().catch(() => null),
+      ]);
+
+      const isGmailLive = Boolean(statusRes?.data?.is_connected);
+
+      if (statusRes?.success && statusRes.data) {
+        setIntegrationStatus(statusRes.data);
+      }
+      if (prefRes?.success && prefRes.data) {
+        setPreferences(prefRes.data);
+      }
+
       if (userRes?.success && userRes.data) {
+        const connectedEmail = isGmailLive && statusRes?.data?.connected_email
+          ? statusRes.data.connected_email
+          : userRes.data.email;
+
         setUser({
           id: userRes.data.id,
-          name: userRes.data.name,
-          email: userRes.data.email,
+          name: isGmailLive && statusRes?.data?.connected_email
+            ? statusRes.data.connected_email.split('@')[0].replace(/[._]/g, ' ').replace(/\b\w/g, l => l.toUpperCase())
+            : userRes.data.name,
+          email: connectedEmail,
           plan: userRes.data.plan || 'Pro Plan',
         });
-        setIsMockData(userRes.demo_mode ?? false);
+        setIsMockData(!isGmailLive && Boolean(userRes.demo_mode));
       }
 
       // 2. Fetch Emails & Folder Counts
       const emailRes = await api.emails.list().catch(() => null);
-      if (emailRes?.success && emailRes.data?.items?.length) {
-        const mappedEmails = emailRes.data.items.map(e => ({
+      if (emailRes?.success && emailRes.data) {
+        const rawItems = emailRes.data.items || [];
+        const mappedEmails = rawItems.map(e => ({
           id: e.id,
-          from: { name: e.from_name, email: e.from_email, avatar: e.from_name?.slice(0, 2).toUpperCase() || 'U' },
+          messageId: e.message_id,
+          threadId: e.thread_id,
+          from: {
+            name: e.from_name || e.from_email || 'Unknown',
+            email: e.from_email,
+            avatar: (e.from_name || e.from_email || 'U').slice(0, 2).toUpperCase(),
+          },
           to: e.to,
-          subject: e.subject,
+          subject: e.subject || '(No Subject)',
           preview: e.preview || (e.body ? e.body.slice(0, 80) : ''),
           body: e.body || '',
-          time: e.received_at ? new Date(e.received_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'Recent',
+          time: e.received_at
+            ? new Date(e.received_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+            : 'Recent',
           date: e.received_at ? e.received_at.split('T')[0] : '',
           category: e.category || 'Work',
           isRead: e.is_read,
@@ -89,6 +129,7 @@ export function AppProvider({ children }) {
           urgency: e.urgency || 'low',
           requiresReply: e.requires_reply,
           suggestedReply: e.ai_suggested_reply || null,
+          hasAttachments: e.has_attachments || false,
           aiAnalysis: {
             confidence: e.ai_confidence || 90,
             category: e.category || 'Work',
@@ -102,10 +143,16 @@ export function AppProvider({ children }) {
           },
         }));
 
-        setEmails(mappedEmails);
-        if (mappedEmails.length > 0) {
+        if (isGmailLive) {
+          // When Gmail is connected, display real data strictly
+          setEmails(mappedEmails);
+          setSelectedEmail(mappedEmails.length > 0 ? mappedEmails[0] : null);
+          setIsMockData(false);
+        } else if (mappedEmails.length > 0) {
+          setEmails(mappedEmails);
           setSelectedEmail(mappedEmails[0]);
         }
+
         if (emailRes.data.folder_counts) {
           setFolderCounts(emailRes.data.folder_counts);
         }
@@ -133,15 +180,6 @@ export function AppProvider({ children }) {
         );
       }
 
-      // 5. Fetch Preferences & Integration Status
-      const [prefRes, statusRes] = await Promise.all([
-        api.preferences.get().catch(() => null),
-        api.auth.getGoogleStatus().catch(() => null),
-      ]);
-
-      if (prefRes?.success) setPreferences(prefRes.data);
-      if (statusRes?.success) setIntegrationStatus(statusRes.data);
-
       setIsBackendConnected(true);
     } catch (err) {
       console.warn('Backend unavailable or network error, running in local fallback mode:', err);
@@ -155,7 +193,74 @@ export function AppProvider({ children }) {
     loadInitialData();
   }, [loadInitialData]);
 
+  // Handle OAuth callback parameters on return to application
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const oauthStatus = params.get('oauth');
+    const returnedToken = params.get('token');
+    if (oauthStatus === 'success') {
+      if (returnedToken) {
+        localStorage.setItem('mailmind_token', returnedToken);
+      }
+      toast.success('Gmail account connected successfully! Synced with Google.');
+      setCurrentPage('settings');
+      window.history.replaceState({}, document.title, window.location.pathname);
+      loadInitialData();
+    } else if (oauthStatus === 'error') {
+      const errorMsg = params.get('message') || 'Failed to connect Google account.';
+      toast.error(decodeURIComponent(errorMsg));
+      setCurrentPage('settings');
+      window.history.replaceState({}, document.title, window.location.pathname);
+    }
+  }, [loadInitialData]);
+
   // ── Actions Connected to Backend ──
+  const syncGmail = useCallback(async () => {
+    setSyncing(true);
+    const syncToast = toast.loading('Syncing with Gmail...');
+    try {
+      const res = await api.emails.sync(30);
+      if (res?.success) {
+        toast.success(res.data?.message || 'Inbox updated from Gmail', { id: syncToast });
+        await loadInitialData();
+      } else {
+        toast.error(res?.message || 'Sync failed', { id: syncToast });
+      }
+    } catch (err) {
+      toast.error(err.message || 'Sync error', { id: syncToast });
+    } finally {
+      setSyncing(false);
+    }
+  }, [loadInitialData]);
+
+  const loadThread = useCallback(async (threadId) => {
+    if (!threadId) {
+      setCurrentThread(null);
+      return;
+    }
+    setLoadingThread(true);
+    try {
+      const res = await api.emails.getThread(threadId);
+      if (res?.success && res.data?.messages) {
+        setCurrentThread(res.data.messages);
+      } else {
+        setCurrentThread(null);
+      }
+    } catch {
+      setCurrentThread(null);
+    } finally {
+      setLoadingThread(false);
+    }
+  }, []);
+
+  const selectEmailWithThread = useCallback((email) => {
+    setSelectedEmail(email);
+    if (email?.threadId) {
+      loadThread(email.threadId);
+    } else {
+      setCurrentThread(null);
+    }
+  }, [loadThread]);
 
   const markAsRead = useCallback(async (emailId) => {
     setEmails(prev => prev.map(e => e.id === emailId ? { ...e, isRead: true } : e));
@@ -374,6 +479,8 @@ export function AppProvider({ children }) {
       isMockData, isBackendConnected, loading,
       folderCounts,
       refreshInitialData: loadInitialData,
+      syncGmail, syncing,
+      currentThread, loadThread, loadingThread, selectEmailWithThread,
     }}>
       {children}
     </AppContext.Provider>

@@ -58,10 +58,11 @@ class Settings(BaseSettings):
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60
     ENCRYPTION_KEY: str = ""
 
-    # Google OAuth (Future phases)
+    # Google OAuth & Frontend
     GOOGLE_CLIENT_ID: str = ""
     GOOGLE_CLIENT_SECRET: str = ""
-    GOOGLE_REDIRECT_URI: str = "http://localhost:8000/auth/google/callback"
+    GOOGLE_REDIRECT_URI: str = "http://localhost:8000/api/v1/auth/google/callback"
+    FRONTEND_URL: str = "http://localhost:5173"
 
     # AI Provider (Future phases)
     OPENAI_API_KEY: str = ""

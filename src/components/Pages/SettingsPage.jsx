@@ -33,8 +33,8 @@ export default function SettingsPage() {
     setConnectingGoogle(true);
     try {
       const res = await api.auth.getGoogleAuthUrl();
-      if (res?.auth_url) {
-        window.location.href = res.auth_url;
+      if (res?.data?.auth_url) {
+        window.location.href = res.data.auth_url;
       } else {
         toast.error('Google OAuth URL not returned from backend');
       }

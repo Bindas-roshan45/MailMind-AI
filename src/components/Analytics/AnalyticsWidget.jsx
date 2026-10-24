@@ -1,5 +1,4 @@
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts';
-import { MOCK_ANALYTICS } from '../../data/mockData';
 import { TrendingUp, ArrowUpRight } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 
@@ -15,8 +14,31 @@ const CustomTooltip = ({ active, payload, label }) => {
 };
 
 export default function AnalyticsWidget() {
-  const { setCurrentPage } = useApp();
-  const { weeklyData, totalReceived, totalReplied, pending } = MOCK_ANALYTICS;
+  const { setCurrentPage, emails, folderCounts } = useApp();
+
+  const totalReceived = folderCounts?.inbox ?? emails.length;
+  const pending = emails.filter(e => e.requiresReply).length;
+  const totalReplied = folderCounts?.sent ?? emails.filter(e => !e.requiresReply).length;
+
+  const days = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+  const dayCounts = { Mon: 0, Tue: 0, Wed: 0, Thu: 0, Fri: 0, Sat: 0, Sun: 0 };
+  const repliedCounts = { Mon: 0, Tue: 0, Wed: 0, Thu: 0, Fri: 0, Sat: 0, Sun: 0 };
+
+  emails.forEach(e => {
+    if (e.date) {
+      const dayName = new Date(e.date).toLocaleDateString('en-US', { weekday: 'short' });
+      if (dayCounts[dayName] !== undefined) {
+        dayCounts[dayName] += 1;
+        if (!e.requiresReply) repliedCounts[dayName] += 1;
+      }
+    }
+  });
+
+  const weeklyData = days.map(d => ({
+    day: d,
+    received: dayCounts[d],
+    replied: repliedCounts[d],
+  }));
 
   return (
     <div className="card-white p-4 h-full flex flex-col justify-between">

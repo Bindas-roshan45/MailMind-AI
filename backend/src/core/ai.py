@@ -15,7 +15,7 @@ import asyncio
 import json
 import logging
 import re
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from src.config import settings
 
@@ -59,17 +59,52 @@ def _resolve_tone(tone: str) -> dict:
     return _TONE_CONFIG.get(tone.strip().lower(), _TONE_CONFIG[_DEFAULT_TONE])
 
 
-def _build_smart_draft(subject: str, body: str, tone: str) -> str:
+def _build_smart_draft(
+    subject: str,
+    body: str,
+    tone: str = "professional",
+    sender_name: Optional[str] = None,
+    language: str = "english",
+) -> str:
     """
     Locally-generated smart draft — no API key required.
-    Used as fallback when no provider is configured or any API call fails.
+    Contextually tailored to the actual email subject, sender, and body snippet.
     """
     cfg = _resolve_tone(tone)
-    body_snippet = body[:150].strip() if body else "your message"
+    first_name = sender_name.split()[0].capitalize() if sender_name and sender_name.strip() else None
+
+    greeting = (
+        f"Dear {first_name}," if first_name and tone.lower() in ("professional", "formal")
+        else (f"Hi {first_name}," if first_name else cfg['greeting'])
+    )
+
+    clean_subj = subject.strip() if subject else "your inquiry"
+    body_snippet = body[:120].strip() if body else "the matter"
+
+    lang_clean = (language or "english").lower().strip()
+    if lang_clean == "hindi":
+        salutation = f"नमस्ते {first_name}," if first_name else "नमस्ते,"
+        return (
+            f"{salutation}\n\n"
+            f"\"{clean_subj}\" के संबंध में आपके संदेश के लिए धन्यवाद। "
+            f"मैंने आपके द्वारा साझा किए गए विवरण की समीक्षा कर ली है।\n\n"
+            f"मैं इस विषय पर आगे बढ़ने के लिए तैयार हूँ। कृपया बताएं कि इस पर विस्तृत चर्चा के लिए आपके पास इस सप्ताह कब समय होगा।\n\n"
+            f"सादर,\nMailMind AI User"
+        )
+    elif lang_clean == "hinglish":
+        salutation = f"Hi {first_name}," if first_name else "Hi there,"
+        return (
+            f"{salutation}\n\n"
+            f"Thanks for reaching out regarding \"{clean_subj}\". "
+            f"Maine aapka message check kar liya hai aur main ispe aage proceed karna chahta hoon.\n\n"
+            f"Please batayein ki is week aap kab convenient time par ek quick discussion ke liye available hain.\n\n"
+            f"Best regards,\nMailMind AI User"
+        )
+
     return (
-        f"{cfg['greeting']}\n\n"
-        f"Thank you for reaching out regarding \"{subject}\". "
-        f"I have reviewed {body_snippet}... and would love to move forward.\n\n"
+        f"{greeting}\n\n"
+        f"Thank you for reaching out regarding \"{clean_subj}\". "
+        f"I have reviewed your message regarding {body_snippet}... and would love to move forward with next steps.\n\n"
         f"Please let me know your availability for a brief discussion this week.\n\n"
         f"{cfg['closing']}"
     )
@@ -84,44 +119,181 @@ class AIEngine:
     """
 
     def __init__(self) -> None:
-        self.provider: str = (settings.AI_PROVIDER or "gemini").strip().lower()
-        self.gemini_key: str = settings.GEMINI_API_KEY or ""
-        self.gemini_model: str = settings.GEMINI_MODEL or "gemini-3.5-flash-lite"
-        self.gemini_fallback_model: str = "gemini-3.8-flash"
-        self.openai_key: str = settings.OPENAI_API_KEY or ""
+        self.gemini_model: str = settings.GEMINI_MODEL or "gemini-2.5-flash"
+        self.gemini_fallback_model: str = "gemini-2.0-flash"
         self.openai_model: str = settings.OPENAI_MODEL or "gpt-4o"
+
+    @property
+    def current_gemini_key(self) -> str:
+        import os
+        return (settings.GEMINI_API_KEY or os.environ.get("GEMINI_API_KEY", "")).strip()
+
+    @property
+    def current_openai_key(self) -> str:
+        import os
+        return (settings.OPENAI_API_KEY or os.environ.get("OPENAI_API_KEY", "")).strip()
+
+    @property
+    def current_provider(self) -> str:
+        import os
+        return (settings.AI_PROVIDER or os.environ.get("AI_PROVIDER", "gemini")).strip().lower()
+
+    # Legacy attributes for backward compatibility with mock tests
+    @property
+    def provider(self) -> str:
+        return self.current_provider
+
+    @provider.setter
+    def provider(self, val: str) -> None:
+        self._custom_provider = val
+
+    @property
+    def gemini_key(self) -> str:
+        return getattr(self, "_custom_gemini_key", None) or self.current_gemini_key
+
+    @gemini_key.setter
+    def gemini_key(self, val: str) -> None:
+        self._custom_gemini_key = val
+
+    @property
+    def openai_key(self) -> str:
+        return getattr(self, "_custom_openai_key", None) or self.current_openai_key
+
+    @openai_key.setter
+    def openai_key(self, val: str) -> None:
+        self._custom_openai_key = val
+
+    @property
+    def gemini_fallback_model(self) -> str:
+        return getattr(self, "_gemini_fallback_model", "gemini-2.0-flash")
+
+    @gemini_fallback_model.setter
+    def gemini_fallback_model(self, val: str) -> None:
+        self._gemini_fallback_model = val
+
+    def get_provider_status(self) -> Dict[str, Any]:
+        """Check active provider configuration and key availability."""
+        prov = self.current_provider
+        if prov == "gemini":
+            key = self.current_gemini_key
+            is_valid = bool(key and not key.startswith("your_"))
+            return {
+                "provider": "gemini",
+                "configured_provider": "gemini",
+                "is_available": is_valid,
+                "model": getattr(self, "gemini_model", "gemini-2.5-flash"),
+                "message": "Google Gemini configured" if is_valid else "Gemini API key is not configured in backend/.env",
+            }
+        elif prov == "openai":
+            key = self.current_openai_key
+            is_valid = bool(key and not key.startswith("your_"))
+            return {
+                "provider": "openai",
+                "configured_provider": "openai",
+                "is_available": is_valid,
+                "model": getattr(self, "openai_model", "gpt-4o"),
+                "message": "OpenAI configured" if is_valid else "OpenAI API key is not configured in backend/.env",
+            }
+        return {
+            "provider": prov,
+            "configured_provider": prov,
+            "is_available": False,
+            "message": f"Unsupported AI provider: {prov}",
+        }
 
     # ------------------------------------------------------------------
     # Public API: Reply Generation
     # ------------------------------------------------------------------
+
+    async def generate_reply_with_metadata(
+        self,
+        email_subject: str,
+        email_body: str,
+        tone: str = "professional",
+        sender_name: Optional[str] = None,
+        language: str = "english",
+        thread_history: Optional[str] = None,
+    ) -> Tuple[str, Dict[str, Any]]:
+        """
+        Generate a reply with comprehensive provider provenance metadata.
+        Falls back gracefully to smart draft if API is unavailable or keys missing.
+        """
+        tone_key = tone.strip().lower() if tone else _DEFAULT_TONE
+        prov = self.current_provider
+        g_key = self.current_gemini_key
+        o_key = self.current_openai_key
+
+        # 1. Gemini (official google-genai SDK)
+        if prov == "gemini" and g_key and not g_key.startswith("your_"):
+            result = await self._generate_with_gemini(
+                email_subject, email_body, tone_key, sender_name, language, thread_history
+            )
+            if result is not None:
+                return result, {
+                    "provider": "gemini",
+                    "model": self.gemini_model,
+                    "is_fallback": False,
+                    "notice": None,
+                }
+
+        # 2. OpenAI
+        if prov == "openai" and o_key and not o_key.startswith("your_"):
+            result = await self._generate_with_openai(
+                email_subject, email_body, tone_key, sender_name, language, thread_history
+            )
+            if result is not None:
+                return result, {
+                    "provider": "openai",
+                    "model": self.openai_model,
+                    "is_fallback": False,
+                    "notice": None,
+                }
+
+        # 3. Smart-draft fallback
+        logger.info("Falling back to contextual smart draft (provider=%s, tone=%s, lang=%s)", prov, tone_key, language)
+        fallback_text = _build_smart_draft(
+            subject=email_subject,
+            body=email_body,
+            tone=tone_key,
+            sender_name=sender_name,
+            language=language,
+        )
+
+        notice = None
+        if prov in ("gemini", "openai") and not (g_key or o_key):
+            notice = f"{prov.capitalize()} API key not configured. Using rule-based smart draft."
+        elif prov in ("gemini", "openai"):
+            notice = f"{prov.capitalize()} API temporarily unavailable. Using rule-based smart draft."
+
+        return fallback_text, {
+            "provider": "smart_fallback",
+            "model": "rule_based",
+            "is_fallback": True,
+            "notice": notice,
+        }
 
     async def generate_reply(
         self,
         email_subject: str,
         email_body: str,
         tone: str = "professional",
+        sender_name: Optional[str] = None,
+        language: str = "english",
+        thread_history: Optional[str] = None,
     ) -> str:
         """
         Generate a draft reply for an email (returns string).
-        Falls back to smart draft if API is unavailable or keys missing.
+        Maintains backward compatibility with all existing test signatures.
         """
-        tone_key = tone.strip().lower() if tone else _DEFAULT_TONE
-
-        # 1. Gemini (official google-genai SDK)
-        if self.provider == "gemini" and self.gemini_key:
-            result = await self._generate_with_gemini(email_subject, email_body, tone_key)
-            if result is not None:
-                return result
-
-        # 2. OpenAI
-        if self.provider == "openai" and self.openai_key:
-            result = await self._generate_with_openai(email_subject, email_body, tone_key)
-            if result is not None:
-                return result
-
-        # 3. Smart-draft fallback
-        logger.info("Falling back to smart draft (provider=%s, tone=%s)", self.provider, tone_key)
-        return _build_smart_draft(email_subject, email_body, tone_key)
+        text, _ = await self.generate_reply_with_metadata(
+            email_subject=email_subject,
+            email_body=email_body,
+            tone=tone,
+            sender_name=sender_name,
+            language=language,
+            thread_history=thread_history,
+        )
+        return text
 
     # ------------------------------------------------------------------
     # Public API: Summarization
@@ -424,7 +596,13 @@ class AIEngine:
     # ------------------------------------------------------------------
 
     async def _generate_with_gemini(
-        self, subject: str, body: str, tone: str
+        self,
+        subject: str,
+        body: str,
+        tone: str,
+        sender_name: Optional[str] = None,
+        language: str = "english",
+        thread_history: Optional[str] = None,
     ) -> Optional[str]:
         """Call Google Gemini for reply generation."""
         try:
@@ -432,28 +610,55 @@ class AIEngine:
             from google.genai import types as genai_types
 
             tone_cfg = _resolve_tone(tone)
+            first_name = sender_name.split()[0].capitalize() if sender_name and sender_name.strip() else None
+            greeting = (
+                f"Dear {first_name}," if first_name and tone.lower() in ("professional", "formal")
+                else (f"Hi {first_name}," if first_name else tone_cfg['greeting'])
+            )
+
+            lang_instruction = ""
+            lang_clean = (language or "english").lower().strip()
+            if lang_clean == "hindi":
+                lang_instruction = "\nWrite the reply in clean, professional Hindi (Devanagari script)."
+            elif lang_clean == "hinglish":
+                lang_instruction = "\nWrite the reply in natural, everyday Hinglish (Hindi written using the English/Latin alphabet, commonly used in business emails)."
+
+            thread_section = f"\n\nConversation context:\n{thread_history}" if thread_history else ""
+
             prompt = (
                 f"You are MailMind AI, an intelligent email assistant.\n"
-                f"{tone_cfg['prompt_style']}\n\n"
+                f"{tone_cfg['prompt_style']}{lang_instruction}\n\n"
                 f"Original email:\n"
                 f"Subject: {subject}\n"
-                f"Body: {body}\n\n"
+                f"Sender: {sender_name or 'Sender'}\n"
+                f"Body:\n{body}{thread_section}\n\n"
                 f"Write only the reply body (no subject line). "
-                f"Begin with: {tone_cfg['greeting']}\n"
+                f"Begin with: {greeting}\n"
                 f"End with: {tone_cfg['closing']}\n"
-                f"Keep the reply under 200 words."
+                f"Keep the reply concise, professional, and under 200 words."
             )
 
             def _sync_gemini():
-                client = genai.Client(api_key=self.gemini_key)
-                return client.models.generate_content(
-                    model=self.gemini_model,
-                    contents=prompt,
-                    config=genai_types.GenerateContentConfig(
-                        max_output_tokens=400,
-                        temperature=0.7,
-                    ),
-                )
+                client = genai.Client(api_key=self.current_gemini_key)
+                models_to_try = [self.gemini_model, self.gemini_fallback_model, "gemini-2.5-flash", "gemini-1.5-flash"]
+                last_err = None
+                for m in models_to_try:
+                    if not m:
+                        continue
+                    try:
+                        return client.models.generate_content(
+                            model=m,
+                            contents=prompt,
+                            config=genai_types.GenerateContentConfig(
+                                max_output_tokens=400,
+                                temperature=0.7,
+                            ),
+                        )
+                    except Exception as err:
+                        last_err = err
+                        continue
+                if last_err:
+                    raise last_err
 
             response = await asyncio.to_thread(_sync_gemini)
             text = (response.text or "").strip()
@@ -469,16 +674,36 @@ class AIEngine:
             return None
 
     async def _generate_with_openai(
-        self, subject: str, body: str, tone: str
+        self,
+        subject: str,
+        body: str,
+        tone: str,
+        sender_name: Optional[str] = None,
+        language: str = "english",
+        thread_history: Optional[str] = None,
     ) -> Optional[str]:
         """Call OpenAI chat completion for reply generation."""
         try:
             import openai
 
             tone_cfg = _resolve_tone(tone)
+            first_name = sender_name.split()[0].capitalize() if sender_name and sender_name.strip() else None
+            greeting = (
+                f"Dear {first_name}," if first_name and tone.lower() in ("professional", "formal")
+                else (f"Hi {first_name}," if first_name else tone_cfg['greeting'])
+            )
+
+            lang_instruction = ""
+            lang_clean = (language or "english").lower().strip()
+            if lang_clean == "hindi":
+                lang_instruction = " Write the reply in clean, professional Hindi (Devanagari script)."
+            elif lang_clean == "hinglish":
+                lang_instruction = " Write the reply in natural, everyday Hinglish (Hindi written using the English/Latin alphabet)."
+
+            thread_section = f"\n\nConversation context:\n{thread_history}" if thread_history else ""
 
             def _sync_openai():
-                client = openai.OpenAI(api_key=self.openai_key)
+                client = openai.OpenAI(api_key=self.current_openai_key)
                 return client.chat.completions.create(
                     model=self.openai_model,
                     messages=[
@@ -486,15 +711,16 @@ class AIEngine:
                             "role": "system",
                             "content": (
                                 f"You are MailMind AI, an intelligent email assistant. "
-                                f"{tone_cfg['prompt_style']}"
+                                f"{tone_cfg['prompt_style']}{lang_instruction} "
+                                f"Start with '{greeting}' and end with '{tone_cfg['closing']}'."
                             ),
                         },
                         {
                             "role": "user",
-                            "content": f"Subject: {subject}\n\nBody: {body}",
+                            "content": f"Subject: {subject}\nSender: {sender_name or 'Sender'}\n\nBody: {body}{thread_section}",
                         },
                     ],
-                    max_tokens=300,
+                    max_tokens=350,
                 )
 
             response = await asyncio.to_thread(_sync_openai)

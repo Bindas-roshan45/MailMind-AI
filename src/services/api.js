@@ -28,6 +28,30 @@ async function request(endpoint, options = {}) {
     const data = await res.json();
     if (!res.ok) {
       const errorMsg = data?.message || data?.detail || `API Error (${res.status})`;
+
+      // Distinguish Application JWT expiration from Google OAuth token errors
+      const isAppJwtExpired =
+        res.status === 401 &&
+        (errorMsg.toLowerCase().includes('application session') ||
+          errorMsg.toLowerCase().includes('invalid or expired access token') ||
+          errorMsg.toLowerCase().includes('not authenticated'));
+
+      if (isAppJwtExpired && !options._retried) {
+        localStorage.removeItem('mailmind_token');
+        try {
+          const demoRes = await fetch(`${API_BASE}/auth/demo-token`, { method: 'POST' });
+          if (demoRes.ok) {
+            const demoData = await demoRes.json();
+            if (demoData?.access_token) {
+              localStorage.setItem('mailmind_token', demoData.access_token);
+              return request(endpoint, { ...options, _retried: true });
+            }
+          }
+        } catch {
+          // If demo token re-issue is not available, proceed with throwing error
+        }
+      }
+
       const err = new Error(errorMsg);
       err.status = res.status;
       err.data = data;
@@ -52,6 +76,8 @@ export const api = {
     getMe: () => request('/auth/me'),
     getGoogleStatus: () => request('/auth/google/status'),
     getGoogleAuthUrl: () => request('/auth/google/url'),
+    submitGoogleCallback: (payload) =>
+      request('/auth/google/callback', { method: 'POST', body: JSON.stringify(payload) }),
     disconnectGoogle: () => request('/auth/google/disconnect', { method: 'POST' }),
   },
 
@@ -71,6 +97,8 @@ export const api = {
     },
     get: (id) => request(`/emails/${id}`),
     stats: () => request('/emails/stats'),
+    sync: (maxResults = 30) => request(`/emails/sync?max_results=${maxResults}`, { method: 'POST' }),
+    getThread: (threadId) => request(`/emails/threads/${threadId}`),
     toggleStar: (id) => request(`/emails/${id}/star`, { method: 'PATCH' }),
     markRead: (id) => request(`/emails/${id}/read`, { method: 'PATCH' }),
     delete: (id) => request(`/emails/${id}`, { method: 'DELETE' }),
@@ -79,8 +107,11 @@ export const api = {
 
   // ── AI Capabilities (Powered by Gemini) ──
   ai: {
+    getProviderStatus: () => request('/ai/provider-status'),
     generateDraft: (payload) =>
       request('/ai/generate-draft', { method: 'POST', body: JSON.stringify(payload) }),
+    saveDraft: (payload) =>
+      request('/ai/save-draft', { method: 'POST', body: JSON.stringify(payload) }),
     approveDraft: (draftId, isApproved) =>
       request(`/ai/drafts/${draftId}/approve`, {
         method: 'POST',

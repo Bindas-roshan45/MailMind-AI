@@ -1,4 +1,4 @@
-import { Star, Inbox } from 'lucide-react';
+import { Star, Inbox, RefreshCw } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { Avatar, CategoryBadge, EmptyState } from '../ui';
 
@@ -28,7 +28,7 @@ function EmailRow({ email, isSelected, onClick, onStar }) {
       )}
 
       {/* Avatar */}
-      <Avatar name={email.from.name} size="sm" className="mt-0.5" />
+      <Avatar name={email.from?.name || 'User'} size="sm" className="mt-0.5" />
 
       {/* Content */}
       <div className="flex-1 min-w-0">
@@ -40,7 +40,7 @@ function EmailRow({ email, isSelected, onClick, onStar }) {
                 : 'font-medium text-[#475569] dark:text-[#CBD5E1]'
             }`}
           >
-            {email.from.name}
+            {email.from?.name || email.from?.email || 'Unknown'}
           </span>
           <span className="text-[11px] text-[#7B8497] dark:text-[#94A3B8] shrink-0 font-normal">
             {email.time}
@@ -103,10 +103,16 @@ export default function EmailList({ onSelectMobile }) {
     activeFilter, setActiveFilter,
     activeFolder,
     toggleStar, markAsRead,
+    syncGmail, syncing, loading, integrationStatus,
+    selectEmailWithThread,
   } = useApp();
 
   const handleSelect = (email) => {
-    setSelectedEmail(email);
+    if (selectEmailWithThread) {
+      selectEmailWithThread(email);
+    } else {
+      setSelectedEmail(email);
+    }
     markAsRead(email.id);
     if (onSelectMobile) onSelectMobile(email);
   };
@@ -116,12 +122,29 @@ export default function EmailList({ onSelectMobile }) {
       {/* Header & Filter Chips */}
       <div className="px-4 py-3 border-b border-[#E5EAF2] dark:border-[#334155] bg-white dark:bg-[#1E293B]">
         <div className="flex items-center justify-between mb-2.5">
-          <h2 className="text-sm font-bold text-[#1E293B] dark:text-white capitalize">
-            {activeFolder}
-          </h2>
-          <span className="text-xs text-[#7B8497] font-medium">
-            {filteredEmails.length} {filteredEmails.length === 1 ? 'email' : 'emails'}
-          </span>
+          <div className="flex items-center gap-2">
+            <h2 className="text-sm font-bold text-[#1E293B] dark:text-white capitalize">
+              {activeFolder}
+            </h2>
+            {integrationStatus?.is_connected && (
+              <span className="w-2 h-2 rounded-full bg-emerald-500" title="Connected to Gmail" />
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-[#7B8497] font-medium">
+              {filteredEmails.length} {filteredEmails.length === 1 ? 'email' : 'emails'}
+            </span>
+            <button
+              onClick={() => syncGmail()}
+              disabled={syncing}
+              className={`p-1.5 rounded-lg border border-[#E5EAF2] dark:border-[#334155] text-[#7B8497] hover:text-[#4169E1] hover:border-[#4169E1] transition-all ${
+                syncing ? 'animate-spin text-[#4169E1]' : ''
+              }`}
+              title="Sync Inbox with Gmail"
+            >
+              <RefreshCw className="w-3.5 h-3.5" />
+            </button>
+          </div>
         </div>
 
         <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar pb-0.5">
@@ -148,12 +171,41 @@ export default function EmailList({ onSelectMobile }) {
 
       {/* Email rows list */}
       <div className="flex-1 overflow-y-auto divide-y divide-[#E5EAF2] dark:divide-[#334155]">
-        {filteredEmails.length === 0 ? (
-          <EmptyState
-            icon={Inbox}
-            title="No emails found"
-            description="Try clearing your search query or selecting a different filter"
-          />
+        {loading && filteredEmails.length === 0 ? (
+          <div className="p-4 space-y-3">
+            {[1, 2, 3, 4, 5].map(n => (
+              <div key={n} className="animate-pulse flex items-start gap-3 py-2">
+                <div className="w-8 h-8 rounded-full bg-slate-200 dark:bg-slate-700 shrink-0" />
+                <div className="flex-1 space-y-2">
+                  <div className="h-3 bg-slate-200 dark:bg-slate-700 rounded w-1/3" />
+                  <div className="h-3 bg-slate-200 dark:bg-slate-700 rounded w-4/5" />
+                  <div className="h-2 bg-slate-100 dark:bg-slate-800 rounded w-2/3" />
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : filteredEmails.length === 0 ? (
+          <div className="p-6 text-center space-y-3">
+            <EmptyState
+              icon={Inbox}
+              title={integrationStatus?.is_connected ? "No emails in this view" : "No emails found"}
+              description={
+                integrationStatus?.is_connected
+                  ? "Your Gmail inbox is up to date. Click sync to check for new messages."
+                  : "Try clearing filters or connect Gmail in Settings."
+              }
+            />
+            {integrationStatus?.is_connected && (
+              <button
+                onClick={() => syncGmail()}
+                disabled={syncing}
+                className="btn-secondary text-xs py-1.5 px-3 mx-auto flex items-center gap-1.5 shadow-xs"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 ${syncing ? 'animate-spin' : ''}`} />
+                <span>{syncing ? 'Checking Gmail...' : 'Sync Gmail Now'}</span>
+              </button>
+            )}
+          </div>
         ) : (
           filteredEmails.map(email => (
             <EmailRow

@@ -1,21 +1,79 @@
 """
 Email endpoints for MailMind AI.
-Provides listing, filtering, search, detail view, and star/read updates.
+Provides listing, filtering, search, detail view, Gmail inbox synchronization,
+thread exploration, and star/read updates.
 """
-from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy.ext.asyncio import AsyncSession
+from datetime import datetime, timezone
+import logging
 from typing import List, Optional
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
+from sqlalchemy import func, select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.api.deps import get_current_user
 from src.config import settings
-from src.database import get_session
+from src.core.gmail import GmailClient, GmailReconnectionRequiredError
+from src.core.gmail_sync import (
+    get_gmail_client_for_user,
+    get_or_sync_email_thread,
+    sync_user_gmail_inbox,
+)
+from src.core.security import decrypt_secret
+from src.crud.connected_account import connected_account_crud
 from src.crud.email import email_crud
+from src.database import get_session
+from src.models import AIReplyDraft, Email, EmailCategory, EmailUrgency, User
 from src.schemas import APIResponse
-from src.models import Email, EmailCategory, User
-from sqlalchemy import func, select
+
+logger = logging.getLogger("mailmind-ai.emails")
 
 router = APIRouter()
+
+
+class SyncResponse(BaseModel):
+    synced: bool
+    connected: bool
+    new_count: int
+    last_sync: Optional[str] = None
+    message: str
+
+
+class SendEmailRequest(BaseModel):
+    to: str = Field(..., min_length=3)
+    subject: str = Field(..., min_length=1)
+    body: str = Field(..., min_length=1)
+    draft_id: Optional[int] = None
+    thread_id: Optional[str] = None
+
+
+@router.post("/sync", response_model=APIResponse, summary="Sync Emails from Gmail")
+async def sync_emails(
+    max_results: int = Query(30, ge=1, le=100),
+    db: AsyncSession = Depends(get_session),
+    user: User = Depends(get_current_user),
+):
+    """
+    Explicitly triggers synchronization of inbox messages from Gmail API.
+    Refreshes tokens if needed, fetches new messages, runs AI categorization,
+    and updates database records.
+    """
+    result = await sync_user_gmail_inbox(db, user, max_results=max_results, force=True)
+    if result.get("reconnect_required"):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Gmail authorization expired or was revoked. Please reconnect your Gmail account in Settings.",
+        )
+    if not result.get("connected"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Gmail account is not connected. Please connect Gmail in Settings.",
+        )
+    return APIResponse(
+        success=result.get("synced", False),
+        data=result,
+        message=result.get("message", "Sync completed"),
+    )
 
 
 @router.get("", response_model=APIResponse, summary="List Emails with Filtering")
@@ -27,11 +85,32 @@ async def list_emails(
     search: Optional[str] = Query(None, description="Search term in subject, body, or sender"),
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=100),
+    auto_sync: bool = Query(True, description="Attempt auto-sync if Gmail connected"),
     db: AsyncSession = Depends(get_session),
     user: User = Depends(get_current_user),
 ):
-    """Retrieve emails for current user with multi-faceted filtering."""
-    if settings.DEMO_MODE:
+    """
+    Retrieve emails for current user with multi-faceted filtering.
+    If Gmail is connected, synchronizes live Gmail inbox;
+    otherwise falls back to demo data only when in DEMO_MODE.
+    """
+    # Check if Gmail account is actively connected
+    gmail_acc = await connected_account_crud.get_by_user_and_provider(db, user.id, "gmail")
+    is_gmail_connected = bool(
+        gmail_acc
+        and gmail_acc.status == "connected"
+        and gmail_acc.access_token_encrypted
+    )
+
+    if is_gmail_connected:
+        # If user has connected Gmail and auto_sync is requested, sync any new messages
+        if auto_sync:
+            try:
+                await sync_user_gmail_inbox(db, user, max_results=25, force=False)
+            except Exception as exc:
+                logger.warning("Background inbox sync skipped: %s", exc)
+    elif settings.DEMO_MODE:
+        # Only seed demo emails if Gmail is NOT connected and DEMO_MODE is true
         await email_crud.seed_demo_emails_if_needed(db, user.id)
 
     category_enum = EmailCategory(category) if category and category in EmailCategory.__members__.values() else None
@@ -54,6 +133,8 @@ async def list_emails(
     for e in emails:
         email_items.append({
             "id": e.id,
+            "message_id": e.message_id,
+            "thread_id": e.thread_id,
             "from_name": e.from_name,
             "from_email": e.from_email,
             "to": e.to,
@@ -68,8 +149,10 @@ async def list_emails(
             "is_starred": e.is_starred,
             "is_important": e.is_important,
             "folder": e.folder,
-            "ai_confidence": e.ai_confidence,
-            "ai_summary": e.ai_key_points,
+            "has_attachments": e.has_attachments,
+            "attachment_count": e.attachment_count,
+            "ai_confidence": e.ai_confidence or 90,
+            "ai_summary": e.ai_key_points or [],
             "ai_suggested_reply": e.ai_suggested_reply,
         })
 
@@ -79,8 +162,55 @@ async def list_emails(
             "items": email_items,
             "total": len(email_items),
             "folder_counts": total_count,
+            "is_gmail_connected": is_gmail_connected,
         },
         message="Emails fetched successfully",
+    )
+
+
+@router.get("/threads/{thread_id}", response_model=APIResponse, summary="Get Email Thread")
+async def get_email_thread(
+    thread_id: str,
+    db: AsyncSession = Depends(get_session),
+    user: User = Depends(get_current_user),
+):
+    """Retrieve all email messages belonging to a given conversation thread."""
+    thread_emails = await get_or_sync_email_thread(db, user, thread_id)
+    if not thread_emails:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Thread not found",
+        )
+
+    items = [
+        {
+            "id": e.id,
+            "message_id": e.message_id,
+            "thread_id": e.thread_id,
+            "from_name": e.from_name,
+            "from_email": e.from_email,
+            "to": e.to,
+            "subject": e.subject,
+            "preview": e.preview,
+            "body": e.body,
+            "received_at": e.received_at.isoformat() if e.received_at else None,
+            "category": e.category.value if e.category else "Work",
+            "is_read": e.is_read,
+            "is_starred": e.is_starred,
+            "folder": e.folder,
+        }
+        for e in thread_emails
+    ]
+
+    return APIResponse(
+        success=True,
+        data={
+            "thread_id": thread_id,
+            "subject": thread_emails[0].subject,
+            "messages": items,
+            "count": len(items),
+        },
+        message="Thread messages retrieved successfully",
     )
 
 
@@ -90,7 +220,12 @@ async def get_email_stats(
     user: User = Depends(get_current_user),
 ):
     """Retrieve email statistics and analytics metrics from database."""
-    if settings.DEMO_MODE:
+    gmail_acc = await connected_account_crud.get_by_user_and_provider(db, user.id, "gmail")
+    is_gmail_connected = bool(
+        gmail_acc and gmail_acc.status == "connected" and gmail_acc.access_token_encrypted
+    )
+
+    if not is_gmail_connected and settings.DEMO_MODE:
         await email_crud.seed_demo_emails_if_needed(db, user.id)
 
     counts = await email_crud.get_folder_counts(db, user_id=user.id)
@@ -109,6 +244,7 @@ async def get_email_stats(
         "unread": unread_count,
         "reply_rate": f"{round((read_count / total_received * 100), 1)}%" if total_received > 0 else "0.0%",
         "avg_response_time": "14.2 mins",
+        "is_gmail_connected": is_gmail_connected,
     }
 
     return APIResponse(
@@ -131,10 +267,13 @@ async def get_email(
 
     data = {
         "id": email.id,
+        "message_id": email.message_id,
+        "thread_id": email.thread_id,
         "from_name": email.from_name,
         "from_email": email.from_email,
         "to": email.to,
         "subject": email.subject,
+        "preview": email.preview,
         "body": email.body,
         "received_at": email.received_at.isoformat() if email.received_at else None,
         "category": email.category.value if email.category else "Work",
@@ -144,10 +283,12 @@ async def get_email(
         "is_starred": email.is_starred,
         "is_important": email.is_important,
         "folder": email.folder,
+        "has_attachments": email.has_attachments,
+        "attachment_count": email.attachment_count,
         "ai_analysis": {
-            "confidence": email.ai_confidence,
-            "category": email.ai_category,
-            "priority": email.ai_priority,
+            "confidence": email.ai_confidence or 90,
+            "category": email.ai_category or (email.category.value if email.category else "Work"),
+            "priority": email.ai_priority or "Normal",
             "sentiment": email.ai_sentiment.value if email.ai_sentiment else "Neutral",
             "key_points": email.ai_key_points or [],
             "extracted_tasks": email.ai_extracted_tasks or [],
@@ -211,13 +352,6 @@ async def delete_email(
     return APIResponse(success=True, message="Email deleted successfully")
 
 
-class SendEmailRequest(BaseModel):
-    to: str = Field(..., min_length=3)
-    subject: str = Field(..., min_length=1)
-    body: str = Field(..., min_length=1)
-    draft_id: Optional[int] = None
-
-
 @router.post("/send", response_model=APIResponse, status_code=status.HTTP_201_CREATED, summary="Send Email with Explicit Approval")
 async def send_email(
     payload: SendEmailRequest,
@@ -229,30 +363,27 @@ async def send_email(
     Dispatches via Gmail API if OAuth is connected; records in sent folder in demo mode.
     NEVER sends without explicit user invocation of this endpoint.
     """
-    from datetime import datetime, timezone
-    from src.crud.connected_account import connected_account_crud
-    from src.core.gmail import GmailClient
-    from src.core.security import decrypt_secret
-    from src.models import AIReplyDraft, EmailUrgency
-
-    accounts = await connected_account_crud.get_by_user(db, user.id)
-    gmail_acc = next((a for a in accounts if a.provider == "gmail" and a.status == "connected"), None)
-
+    client_tuple = await get_gmail_client_for_user(db, user.id)
     real_sent_id = None
-    if gmail_acc and gmail_acc.access_token_encrypted:
+
+    if client_tuple:
+        client, _ = client_tuple
         try:
-            raw_token = decrypt_secret(gmail_acc.access_token_encrypted)
-            raw_refresh = decrypt_secret(gmail_acc.refresh_token_encrypted) if gmail_acc.refresh_token_encrypted else None
-            client = GmailClient(
-                access_token=raw_token,
-                refresh_token=raw_refresh,
-                client_id=settings.GOOGLE_CLIENT_ID,
-                client_secret=settings.GOOGLE_CLIENT_SECRET,
+            sent_res = client.send_message(
+                to=payload.to,
+                subject=payload.subject,
+                body=payload.body,
+                thread_id=payload.thread_id,
             )
-            sent_res = client.send_message(to=payload.to, subject=payload.subject, body=payload.body)
             real_sent_id = sent_res.get("id") if sent_res else None
+        except GmailReconnectionRequiredError as exc:
+            logger.warning("Gmail reconnection required during send for user %s: %s", user.id, exc)
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Gmail authorization expired or was revoked. Please reconnect your Gmail account in Settings.",
+            )
         except Exception as exc:
-            # If real sending fails and not in demo mode, raise
+            logger.error("Gmail send error: %s", exc)
             if not settings.DEMO_MODE:
                 raise HTTPException(
                     status_code=status.HTTP_502_BAD_GATEWAY,
@@ -264,6 +395,7 @@ async def send_email(
     sent_email = Email(
         user_id=user.id,
         message_id=real_sent_id or f"sent-{user.id}-{int(now.timestamp())}",
+        thread_id=payload.thread_id,
         from_name=user.name,
         from_email=user.email,
         to=payload.to,
@@ -271,6 +403,7 @@ async def send_email(
         preview=payload.body[:120].strip(),
         body=payload.body,
         received_at=now,
+        date=now.date(),
         category=EmailCategory.WORK,
         urgency=EmailUrgency.LOW,
         requires_reply=False,

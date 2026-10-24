@@ -1,6 +1,7 @@
 """
 Shared FastAPI dependencies: database session, current user, demo fallback.
 """
+import logging
 from typing import Optional
 
 from fastapi import Depends, HTTPException, status
@@ -14,6 +15,8 @@ from src.crud.connected_account import connected_account_crud
 from src.crud.user import user_crud
 from src.database import get_session
 from src.models import User, UserPlan
+
+logger = logging.getLogger("mailmind-ai.deps")
 
 optional_bearer = HTTPBearer(auto_error=False)
 
@@ -40,7 +43,7 @@ async def get_or_create_demo_user(db: AsyncSession) -> User:
             user_id=user.id,
             email=DEMO_USER_EMAIL,
             provider="gmail",
-            status="connected",
+            status="disconnected",
         )
     return user
 
@@ -59,7 +62,8 @@ async def get_current_user(
         try:
             payload = decode_access_token(credentials.credentials)
             subject = payload.get("sub")
-        except JWTError:
+        except JWTError as jwt_err:
+            logger.info("Application JWT session expired or invalid: %s", jwt_err)
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Invalid or expired access token",

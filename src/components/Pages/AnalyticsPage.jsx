@@ -1,19 +1,58 @@
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
-import { MOCK_ANALYTICS } from '../../data/mockData';
 import { TrendingUp, Clock, CheckCircle2, Zap, ArrowLeft, Download } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 
 export default function AnalyticsPage() {
-  const { setCurrentPage } = useApp();
-  const { weeklyData, totalReceived, totalReplied } = MOCK_ANALYTICS;
+  const { setCurrentPage, emails, folderCounts } = useApp();
 
-  const PIE_DATA = [
-    { name: 'Work', value: 38, color: '#4169E1' },
-    { name: 'Client', value: 24, color: '#F97316' },
-    { name: 'College', value: 18, color: '#22C55E' },
-    { name: 'Promotions', value: 12, color: '#A855F7' },
-    { name: 'Other', value: 8, color: '#64748B' },
-  ];
+  const totalReceived = folderCounts?.inbox ?? emails.length;
+  const totalReplied = folderCounts?.sent ?? emails.filter(e => !e.requiresReply).length;
+
+  const days = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+  const dayCounts = { Mon: 0, Tue: 0, Wed: 0, Thu: 0, Fri: 0, Sat: 0, Sun: 0 };
+  const repliedCounts = { Mon: 0, Tue: 0, Wed: 0, Thu: 0, Fri: 0, Sat: 0, Sun: 0 };
+
+  emails.forEach(e => {
+    if (e.date) {
+      const dayName = new Date(e.date).toLocaleDateString('en-US', { weekday: 'short' });
+      if (dayCounts[dayName] !== undefined) {
+        dayCounts[dayName] += 1;
+        if (!e.requiresReply) repliedCounts[dayName] += 1;
+      }
+    }
+  });
+
+  const weeklyData = days.map(d => ({
+    day: d,
+    received: dayCounts[d],
+    replied: repliedCounts[d],
+  }));
+
+  const catCounts = {};
+  emails.forEach(e => {
+    const cat = e.category || 'Other';
+    catCounts[cat] = (catCounts[cat] || 0) + 1;
+  });
+
+  const colors = {
+    Work: '#4169E1',
+    Client: '#F97316',
+    Personal: '#22C55E',
+    Promotions: '#A855F7',
+    Other: '#64748B',
+  };
+
+  const totalEmailsCount = Math.max(emails.length, 1);
+  const PIE_DATA = Object.keys(catCounts).length > 0
+    ? Object.entries(catCounts).map(([cat, count]) => ({
+        name: cat,
+        value: Math.round((count / totalEmailsCount) * 100),
+        color: colors[cat] || '#3B82F6',
+      }))
+    : [
+        { name: 'Work', value: 50, color: '#4169E1' },
+        { name: 'Other', value: 50, color: '#64748B' },
+      ];
 
   return (
     <div className="flex-1 flex flex-col h-full overflow-y-auto p-4 sm:p-6 bg-[#F5F7FC] dark:bg-[#0F172A] space-y-6">

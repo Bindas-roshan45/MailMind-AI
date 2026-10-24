@@ -16,12 +16,24 @@ from src.schemas import APIResponse
 router = APIRouter()
 
 
+from sqlalchemy import select, desc
+
 class DraftGenerationRequest(BaseModel):
     email_id: Optional[int] = None
     subject: Optional[str] = None
     body: Optional[str] = None
     prompt: Optional[str] = None
+    sender: Optional[str] = None
+    thread_id: Optional[str] = None
     tone: str = Field(default="professional", description="Tone: professional, friendly, formal, short, detailed")
+    language: str = Field(default="english")
+
+
+class SaveDraftRequest(BaseModel):
+    email_id: Optional[int] = None
+    draft_id: Optional[int] = None
+    content: str = Field(..., min_length=1)
+    tone: str = Field(default="professional")
     language: str = Field(default="english")
 
 
@@ -59,6 +71,19 @@ class SubjectRequest(BaseModel):
     prompt: Optional[str] = None
 
 
+@router.get("/provider-status", response_model=APIResponse, summary="Get AI Provider Configuration Status")
+async def get_provider_status(
+    user: User = Depends(get_current_user),
+):
+    """Return status of configured AI provider and whether API keys are loaded."""
+    status_info = ai_engine.get_provider_status()
+    return APIResponse(
+        success=True,
+        data=status_info,
+        message=f"AI provider {status_info.get('configured_provider')} status retrieved.",
+    )
+
+
 @router.post("/generate-draft", response_model=APIResponse, status_code=status.HTTP_201_CREATED, summary="Generate AI Reply Draft")
 async def generate_draft(
     payload: DraftGenerationRequest,
@@ -66,28 +91,51 @@ async def generate_draft(
     user: User = Depends(get_current_user),
 ):
     """
-    Generate an AI reply draft for an email with a given tone (Professional, Friendly, Formal).
+    Generate an AI reply draft for an email with a given tone and language based on actual email content and thread history.
     Does NOT send the email automatically; requires explicit user approval.
     """
     subject = payload.subject or "Message"
     body = payload.body or ""
+    sender_name = payload.sender or ""
+    thread_history = []
     email_id = payload.email_id
 
     if email_id is not None:
         email = await db.get(Email, email_id)
         if not email or email.user_id != user.id:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Email not found")
-        subject = email.subject
-        body = email.body or email.preview or ""
+        subject = email.subject or subject
+        body = email.body or email.preview or body
+        sender_name = email.from_name or sender_name
+
+        # If email belongs to a thread, retrieve recent context from the thread
+        if email.thread_id:
+            thread_stmt = (
+                select(Email)
+                .where(Email.thread_id == email.thread_id, Email.user_id == user.id)
+                .order_by(desc(Email.received_at))
+                .limit(5)
+            )
+            result = await db.execute(thread_stmt)
+            thread_emails = list(result.scalars().all())
+            # Put in chronological order
+            thread_emails.reverse()
+            for te in thread_emails:
+                sender_label = te.from_name or te.from_email
+                snippet = (te.body or te.preview or "")[:300].strip()
+                thread_history.append(f"{sender_label}: {snippet}")
 
     if payload.prompt:
         body = f"{body}\n\nAdditional user prompt/instructions: {payload.prompt}"
 
-    # Generate reply content via AIEngine
-    reply_content = await ai_engine.generate_reply(
+    # Generate reply content and metadata via AIEngine
+    reply_content, metadata = await ai_engine.generate_reply_with_metadata(
         email_subject=subject,
         email_body=body,
         tone=payload.tone,
+        language=payload.language,
+        sender_name=sender_name,
+        thread_history=thread_history,
     )
 
     # Save draft in database if associated with an email (is_approved=False by default)
@@ -111,9 +159,11 @@ async def generate_draft(
                 "draft_id": draft.id,
                 "email_id": draft.email_id,
                 "tone": draft.tone,
+                "language": draft.language,
                 "content": draft.content,
                 "is_approved": draft.is_approved,
                 "is_sent": draft.is_sent,
+                "ai_metadata": metadata,
             },
             message="AI reply draft generated successfully and saved for approval.",
         )
@@ -125,11 +175,73 @@ async def generate_draft(
             "draft_id": None,
             "email_id": None,
             "tone": payload.tone,
+            "language": payload.language,
             "content": reply_content,
             "is_approved": False,
             "is_sent": False,
+            "ai_metadata": metadata,
         },
         message="AI email draft generated successfully.",
+    )
+
+
+@router.post("/save-draft", response_model=APIResponse, summary="Save or Update AI Reply Draft")
+async def save_draft(
+    payload: SaveDraftRequest,
+    db: AsyncSession = Depends(get_session),
+    user: User = Depends(get_current_user),
+):
+    """
+    Explicitly save or update user-edited draft.
+    Does NOT send the email automatically.
+    """
+    draft = None
+    if payload.draft_id:
+        draft = await db.get(AIReplyDraft, payload.draft_id)
+        if not draft or draft.user_id != user.id:
+            draft = None
+
+    if draft:
+        draft.content = payload.content
+        draft.tone = payload.tone
+        draft.language = payload.language
+        db.add(draft)
+        await db.commit()
+        await db.refresh(draft)
+    elif payload.email_id:
+        email = await db.get(Email, payload.email_id)
+        if not email or email.user_id != user.id:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Email not found")
+        draft = AIReplyDraft(
+            email_id=payload.email_id,
+            user_id=user.id,
+            tone=payload.tone,
+            language=payload.language,
+            content=payload.content,
+            is_approved=False,
+            is_sent=False,
+        )
+        db.add(draft)
+        await db.commit()
+        await db.refresh(draft)
+    else:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="email_id or draft_id is required to save a draft",
+        )
+
+    return APIResponse(
+        success=True,
+        data={
+            "draft_id": draft.id,
+            "email_id": draft.email_id,
+            "tone": draft.tone,
+            "language": draft.language,
+            "content": draft.content,
+            "is_approved": draft.is_approved,
+            "is_sent": draft.is_sent,
+        },
+        message="Draft saved successfully.",
     )
 
 

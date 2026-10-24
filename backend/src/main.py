@@ -171,3 +171,18 @@ async def root():
 
 # ─── Mount API v1 Router ────────────────────────────────────────────
 app.include_router(api_router, prefix=settings.API_V1_STR)
+
+
+# ─── Legacy/Compatibility Route for Google OAuth Callback ───────────
+@app.get("/auth/google/callback", include_in_schema=False)
+async def legacy_google_oauth_callback(request: Request):
+    """
+    Compatibility redirect for Google OAuth credentials configured with
+    Authorized Redirect URI: http://localhost:8000/auth/google/callback
+    Redirects to canonical /api/v1/auth/google/callback endpoint with all query params.
+    """
+    from fastapi.responses import RedirectResponse
+    target_url = f"{settings.API_V1_STR}/auth/google/callback"
+    if request.url.query:
+        target_url = f"{target_url}?{request.url.query}"
+    return RedirectResponse(url=target_url, status_code=status.HTTP_307_TEMPORARY_REDIRECT)
