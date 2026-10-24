@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import {
-  Star, Reply, Trash2,
+  Star, Reply, ReplyAll, Forward, Trash2,
   Archive, Clock, RotateCcw, Send, Save,
   MessageSquare, Paperclip, GitBranch,
   Lightbulb, CheckCircle2, AlertCircle, TrendingUp,
@@ -521,10 +521,11 @@ const TABS = [
 export default function EmailDetail({ onBack }) {
   const {
     selectedEmail, toggleStar, deleteEmail, activePanel, setActivePanel, addTask,
-    currentThread, loadingThread,
+    currentThread, loadingThread, setComposing, setEmails,
   } = useApp();
   const [showFullBody, setShowFullBody] = useState(false);
   const [showAiPopup, setShowAiPopup] = useState(false);
+  const [snoozeOpen, setSnoozeOpen] = useState(false);
 
   if (!selectedEmail) {
     return (
@@ -542,6 +543,62 @@ export default function EmailDetail({ onBack }) {
 
   const email = selectedEmail;
 
+  const handleReply = () => {
+    setComposing({
+      mode: 'reply',
+      to: email.from?.email || email.from_email || '',
+      subject: email.subject?.startsWith('Re:') ? email.subject : `Re: ${email.subject || ''}`,
+      threadId: email.thread_id || email.threadId,
+      inReplyTo: email.message_id,
+      body: `\n\n--- On ${email.date || ''}, ${email.from?.name || 'Sender'} wrote ---\n> ${(email.body || '').replace(/\n/g, '\n> ')}`,
+    });
+  };
+
+  const handleReplyAll = () => {
+    setComposing({
+      mode: 'reply_all',
+      to: email.from?.email || email.from_email || '',
+      cc: email.to || '',
+      subject: email.subject?.startsWith('Re:') ? email.subject : `Re: ${email.subject || ''}`,
+      threadId: email.thread_id || email.threadId,
+      inReplyTo: email.message_id,
+      body: `\n\n--- On ${email.date || ''}, ${email.from?.name || 'Sender'} wrote ---\n> ${(email.body || '').replace(/\n/g, '\n> ')}`,
+    });
+  };
+
+  const handleForward = () => {
+    setComposing({
+      mode: 'forward',
+      to: '',
+      subject: email.subject?.startsWith('Fwd:') ? email.subject : `Fwd: ${email.subject || ''}`,
+      body: `\n\n---------- Forwarded message ---------\nFrom: ${email.from?.name || 'Sender'} <${email.from?.email || ''}>\nDate: ${email.date || ''}\nSubject: ${email.subject || ''}\nTo: ${email.to || ''}\n\n${email.body || ''}`,
+    });
+  };
+
+  const handleArchive = async () => {
+    try {
+      await api.emails.changeFolder(email.id, 'archive');
+      setEmails(prev => prev.map(e => e.id === email.id ? { ...e, folder: 'archive' } : e));
+      toast.success('Email archived');
+      if (onBack) onBack();
+    } catch {
+      toast.error('Failed to archive email');
+    }
+  };
+
+  const handleSnooze = async (hours) => {
+    try {
+      const snoozeDate = new Date(Date.now() + hours * 3600 * 1000).toISOString();
+      await api.emails.snooze(email.id, snoozeDate);
+      setEmails(prev => prev.map(e => e.id === email.id ? { ...e, folder: 'snoozed' } : e));
+      setSnoozeOpen(false);
+      toast.success(`Snoozed for ${hours} hours`);
+      if (onBack) onBack();
+    } catch {
+      toast.error('Failed to snooze email');
+    }
+  };
+
   const handleQuickAddTask = () => {
     addTask({
       title: `Follow up on "${email.subject}"`,
@@ -555,7 +612,7 @@ export default function EmailDetail({ onBack }) {
   return (
     <div className="flex-1 flex flex-col min-w-0 bg-white dark:bg-[#1E293B] overflow-hidden relative">
       {/* ── Email Action Toolbar & Header ── */}
-      <div className="px-5 py-3.5 border-b border-[#E5EAF2] dark:border-[#334155] flex items-center justify-between gap-4">
+      <div className="px-5 py-3.5 border-b border-[#E5EAF2] dark:border-[#334155] flex items-center justify-between gap-4 flex-wrap">
         <div className="flex items-center gap-2.5 flex-1 min-w-0">
           {onBack && (
             <button
@@ -578,10 +635,10 @@ export default function EmailDetail({ onBack }) {
         </div>
 
         {/* Action icons */}
-        <div className="flex items-center gap-1.5 shrink-0 text-[#7B8497] dark:text-[#94A3B8]">
+        <div className="flex items-center gap-1 shrink-0 text-[#7B8497] dark:text-[#94A3B8] relative">
           <button
             onClick={() => setShowAiPopup(prev => !prev)}
-            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all shadow-sm ${
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all shadow-sm mr-1 ${
               showAiPopup
                 ? 'bg-[#1E293B] text-white dark:bg-white dark:text-[#1E293B]'
                 : 'bg-gradient-to-r from-[#4169E1] to-[#2563EB] text-white hover:opacity-95 shadow-blue-500/20'
@@ -591,6 +648,29 @@ export default function EmailDetail({ onBack }) {
             <Sparkles className="w-3.5 h-3.5 text-white animate-pulse" />
             <span>AI Insights</span>
           </button>
+
+          <button
+            onClick={handleReply}
+            className="p-1.5 rounded-lg hover:bg-[#F5F7FC] dark:hover:bg-[#28384E] transition-colors text-[#4169E1]"
+            title="Reply"
+          >
+            <Reply className="w-4 h-4" />
+          </button>
+          <button
+            onClick={handleReplyAll}
+            className="p-1.5 rounded-lg hover:bg-[#F5F7FC] dark:hover:bg-[#28384E] transition-colors"
+            title="Reply All"
+          >
+            <ReplyAll className="w-4 h-4" />
+          </button>
+          <button
+            onClick={handleForward}
+            className="p-1.5 rounded-lg hover:bg-[#F5F7FC] dark:hover:bg-[#28384E] transition-colors"
+            title="Forward"
+          >
+            <Forward className="w-4 h-4" />
+          </button>
+
           <button
             onClick={() => toggleStar(email.id)}
             className="p-1.5 rounded-lg hover:bg-[#F5F7FC] dark:hover:bg-[#28384E] transition-colors"
@@ -602,20 +682,48 @@ export default function EmailDetail({ onBack }) {
               }`}
             />
           </button>
+
+          {/* Snooze button with dropdown */}
+          <div className="relative">
+            <button
+              onClick={() => setSnoozeOpen(prev => !prev)}
+              className="p-1.5 rounded-lg hover:bg-[#F5F7FC] dark:hover:bg-[#28384E] transition-colors"
+              title="Snooze"
+            >
+              <Clock className="w-4 h-4" />
+            </button>
+            {snoozeOpen && (
+              <div className="absolute right-0 top-full mt-1 w-36 bg-white dark:bg-[#1E293B] border border-[#E5EAF2] dark:border-[#334155] rounded-lg shadow-lg py-1 z-30 text-xs">
+                <button
+                  onClick={() => handleSnooze(4)}
+                  className="w-full text-left px-3 py-1.5 hover:bg-slate-100 dark:hover:bg-slate-800"
+                >
+                  Later Today (4h)
+                </button>
+                <button
+                  onClick={() => handleSnooze(24)}
+                  className="w-full text-left px-3 py-1.5 hover:bg-slate-100 dark:hover:bg-slate-800"
+                >
+                  Tomorrow
+                </button>
+                <button
+                  onClick={() => handleSnooze(168)}
+                  className="w-full text-left px-3 py-1.5 hover:bg-slate-100 dark:hover:bg-slate-800"
+                >
+                  Next Week
+                </button>
+              </div>
+            )}
+          </div>
+
           <button
-            onClick={() => setActivePanel('ai_reply')}
-            className="p-1.5 rounded-lg hover:bg-[#F5F7FC] dark:hover:bg-[#28384E] transition-colors"
-            title="Reply"
-          >
-            <Reply className="w-4 h-4" />
-          </button>
-          <button
-            onClick={() => toast.success('Email archived')}
+            onClick={handleArchive}
             className="p-1.5 rounded-lg hover:bg-[#F5F7FC] dark:hover:bg-[#28384E] transition-colors"
             title="Archive"
           >
             <Archive className="w-4 h-4" />
           </button>
+
           <button
             onClick={() => {
               deleteEmail(email.id);
@@ -659,6 +767,28 @@ export default function EmailDetail({ onBack }) {
       <div className="flex-1 flex overflow-hidden">
         {/* Left / Center: Body + AI Reply Tabs */}
         <div className="flex-1 flex flex-col overflow-y-auto p-5 space-y-5">
+          {/* Draft banner if in drafts folder */}
+          {email.folder === 'drafts' && (
+            <div className="bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800/80 p-3.5 rounded-xl flex items-center justify-between gap-3 animate-fade-in">
+              <div>
+                <p className="text-xs font-bold text-amber-900 dark:text-amber-200">Unsent Draft Message</p>
+                <p className="text-[11px] text-amber-700 dark:text-amber-300">This message is saved in your drafts. You can edit and send it at any time.</p>
+              </div>
+              <button
+                onClick={() => setComposing({
+                  mode: 'new',
+                  draftId: email.id,
+                  to: email.to || '',
+                  subject: email.subject || '',
+                  body: email.body || '',
+                })}
+                className="btn-primary text-xs py-1.5 px-3 shrink-0"
+              >
+                Continue Editing
+              </button>
+            </div>
+          )}
+
           {/* Email Body text */}
           <div className="card-white p-4">
             <p className="text-xs sm:text-sm text-[#1E293B] dark:text-[#E2E8F0] leading-relaxed whitespace-pre-line font-normal">

@@ -28,6 +28,9 @@ logging.basicConfig(
 logger = logging.getLogger("mailmind-ai")
 
 
+from src.core.background_worker import automation_worker
+
+
 # ─── Lifespan Context Manager ───────────────────────────────────────
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -46,7 +49,15 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             logger.warning(f" Could not auto-create tables: {e}")
 
+    # Launch reliable background automation worker (skip thread spawn during pytest runs)
+    if not os.getenv("PYTEST_CURRENT_TEST"):
+        automation_worker.start()
+
     yield
+
+    # Gracefully stop background worker
+    if not os.getenv("PYTEST_CURRENT_TEST"):
+        await automation_worker.stop()
 
     # Cleanup database connection pool
     logger.info(" Shutting down MailMind AI backend...")

@@ -38,6 +38,7 @@ async_session_maker = async_sessionmaker(
     autoflush=False,
     autocommit=False,
 )
+AsyncSessionLocal = async_session_maker
 
 
 async def get_session() -> AsyncGenerator[AsyncSession, None]:

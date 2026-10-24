@@ -43,7 +43,27 @@ class SendEmailRequest(BaseModel):
     to: str = Field(..., min_length=3)
     subject: str = Field(..., min_length=1)
     body: str = Field(..., min_length=1)
+    cc: Optional[str] = None
+    bcc: Optional[str] = None
     draft_id: Optional[int] = None
+    thread_id: Optional[str] = None
+    in_reply_to: Optional[str] = None
+    attachments: Optional[List[dict]] = None
+
+
+class FolderUpdateRequest(BaseModel):
+    folder: str = Field(..., min_length=1, max_length=50)
+
+
+class SnoozeRequest(BaseModel):
+    snooze_until: Optional[datetime] = None
+
+
+class SaveDraftRequest(BaseModel):
+    id: Optional[int] = None
+    to: Optional[str] = ""
+    subject: Optional[str] = "Draft Message"
+    body: str = ""
     thread_id: Optional[str] = None
 
 
@@ -352,6 +372,105 @@ async def delete_email(
     return APIResponse(success=True, message="Email deleted successfully")
 
 
+@router.patch("/{email_id}/folder", response_model=APIResponse, summary="Move Email to Folder")
+async def change_folder(
+    email_id: int,
+    payload: FolderUpdateRequest,
+    db: AsyncSession = Depends(get_session),
+    user: User = Depends(get_current_user),
+):
+    """Move email to a designated folder (archive, inbox, trash, spam, etc.) with ownership validation."""
+    email = await email_crud.get(db, email_id)
+    if not email or email.user_id != user.id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Email not found")
+
+    email.folder = payload.folder.lower().strip()
+    db.add(email)
+    await db.commit()
+    await db.refresh(email)
+    return APIResponse(
+        success=True,
+        data={"id": email.id, "folder": email.folder},
+        message=f"Email moved to {email.folder}",
+    )
+
+
+@router.patch("/{email_id}/snooze", response_model=APIResponse, summary="Snooze Email")
+async def snooze_email(
+    email_id: int,
+    payload: SnoozeRequest,
+    db: AsyncSession = Depends(get_session),
+    user: User = Depends(get_current_user),
+):
+    """Snooze an email to hide it from inbox until scheduled time."""
+    email = await email_crud.get(db, email_id)
+    if not email or email.user_id != user.id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Email not found")
+
+    email.folder = "snoozed"
+    db.add(email)
+    await db.commit()
+    await db.refresh(email)
+    return APIResponse(
+        success=True,
+        data={"id": email.id, "folder": email.folder, "snooze_until": payload.snooze_until.isoformat() if payload.snooze_until else None},
+        message="Email snoozed",
+    )
+
+
+@router.post("/draft", response_model=APIResponse, summary="Save or Update Email Draft")
+async def save_draft(
+    payload: SaveDraftRequest,
+    db: AsyncSession = Depends(get_session),
+    user: User = Depends(get_current_user),
+):
+    """Save or update an email draft in the user's drafts folder."""
+    now = datetime.now(timezone.utc)
+    if payload.id:
+        # Update existing draft
+        result = await db.execute(
+            select(Email).where(Email.id == payload.id, Email.user_id == user.id, Email.folder == "drafts")
+        )
+        draft_email = result.scalar_one_or_none()
+        if not draft_email:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Draft not found")
+
+        draft_email.to = payload.to or ""
+        draft_email.subject = payload.subject or "Draft Message"
+        draft_email.body = payload.body or ""
+        draft_email.preview = payload.body[:120].strip()
+        db.add(draft_email)
+        await db.commit()
+        await db.refresh(draft_email)
+        return APIResponse(success=True, data={"id": draft_email.id, "subject": draft_email.subject}, message="Draft updated")
+    else:
+        # Create new draft
+        new_draft = Email(
+            user_id=user.id,
+            message_id=f"draft-{user.id}-{int(now.timestamp())}",
+            thread_id=payload.thread_id,
+            from_name=user.name,
+            from_email=user.email,
+            to=payload.to or "",
+            subject=payload.subject or "Draft Message",
+            preview=payload.body[:120].strip(),
+            body=payload.body or "",
+            received_at=now,
+            date=now.date(),
+            category=EmailCategory.WORK,
+            urgency=EmailUrgency.LOW,
+            requires_reply=False,
+            is_read=True,
+            is_starred=False,
+            is_important=False,
+            folder="drafts",
+        )
+        db.add(new_draft)
+        await db.commit()
+        await db.refresh(new_draft)
+        return APIResponse(success=True, data={"id": new_draft.id, "subject": new_draft.subject}, message="Draft saved")
+
+
 @router.post("/send", response_model=APIResponse, status_code=status.HTTP_201_CREATED, summary="Send Email with Explicit Approval")
 async def send_email(
     payload: SendEmailRequest,
@@ -361,6 +480,7 @@ async def send_email(
     """
     Send an email with explicit user authorization.
     Dispatches via Gmail API if OAuth is connected; records in sent folder in demo mode.
+    Supports CC, BCC, in_reply_to, thread_id, and attachments.
     NEVER sends without explicit user invocation of this endpoint.
     """
     client_tuple = await get_gmail_client_for_user(db, user.id)
@@ -373,7 +493,11 @@ async def send_email(
                 to=payload.to,
                 subject=payload.subject,
                 body=payload.body,
+                cc=payload.cc,
+                bcc=payload.bcc,
+                in_reply_to=payload.in_reply_to,
                 thread_id=payload.thread_id,
+                attachments=payload.attachments,
             )
             real_sent_id = sent_res.get("id") if sent_res else None
         except GmailReconnectionRequiredError as exc:
@@ -392,6 +516,9 @@ async def send_email(
 
     # Persist sent email in user's sent folder
     now = datetime.now(timezone.utc)
+    has_att = bool(payload.attachments and len(payload.attachments) > 0)
+    att_count = len(payload.attachments) if payload.attachments else 0
+
     sent_email = Email(
         user_id=user.id,
         message_id=real_sent_id or f"sent-{user.id}-{int(now.timestamp())}",
@@ -411,6 +538,8 @@ async def send_email(
         is_starred=False,
         is_important=False,
         folder="sent",
+        has_attachments=has_att,
+        attachment_count=att_count,
     )
     db.add(sent_email)
 

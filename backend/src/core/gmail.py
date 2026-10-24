@@ -5,6 +5,9 @@ thread fetching, MIME message decoding, and user-authorized email dispatch.
 """
 import base64
 from datetime import datetime, timezone
+from email import encoders
+from email.mime.base import MIMEBase
+from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 import logging
 import re
@@ -228,16 +231,52 @@ class GmailClient:
         subject: str,
         body: str,
         user_id: str = "me",
+        cc: Optional[str] = None,
+        bcc: Optional[str] = None,
         in_reply_to: Optional[str] = None,
         thread_id: Optional[str] = None,
+        is_html: bool = False,
+        attachments: Optional[List[Dict[str, Any]]] = None,
     ) -> Optional[Dict[str, Any]]:
         """
-        Send an email via Gmail API.
+        Send an email via Gmail API with cc, bcc, html, and attachments support.
         SAFETY RULE: Must only be called after explicit user approval.
         """
-        mime_msg = MIMEText(body, "plain", "utf-8")
+        if attachments:
+            mime_msg = MIMEMultipart("mixed")
+            # Text / HTML body part
+            body_part = MIMEText(body, "html" if is_html else "plain", "utf-8")
+            mime_msg.attach(body_part)
+
+            for att in attachments:
+                # att should have: filename, content_bytes (base64 or bytes), content_type
+                try:
+                    filename = att.get("filename", "attachment")
+                    content = att.get("content")
+                    if isinstance(content, str):
+                        content_bytes = base64.b64decode(content)
+                    else:
+                        content_bytes = content
+
+                    part = MIMEBase("application", "octet-stream")
+                    part.set_payload(content_bytes)
+                    encoders.encode_base64(part)
+                    part.add_header(
+                        "Content-Disposition",
+                        f'attachment; filename="{filename}"',
+                    )
+                    mime_msg.attach(part)
+                except Exception as att_err:
+                    logger.warning("Failed attaching file %s: %s", att.get("filename"), att_err)
+        else:
+            mime_msg = MIMEText(body, "html" if is_html else "plain", "utf-8")
+
         mime_msg["to"] = to
         mime_msg["subject"] = subject
+        if cc:
+            mime_msg["cc"] = cc
+        if bcc:
+            mime_msg["bcc"] = bcc
         if in_reply_to:
             mime_msg["In-Reply-To"] = in_reply_to
             mime_msg["References"] = in_reply_to
@@ -252,6 +291,33 @@ class GmailClient:
         )
         logger.info("Email sent successfully via Gmail API (ID: %s)", sent.get("id"))
         return sent
+
+    def create_draft(
+        self,
+        to: str,
+        subject: str,
+        body: str,
+        user_id: str = "me",
+        cc: Optional[str] = None,
+        thread_id: Optional[str] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """Save a draft to Gmail mailbox."""
+        mime_msg = MIMEText(body, "plain", "utf-8")
+        mime_msg["to"] = to
+        mime_msg["subject"] = subject
+        if cc:
+            mime_msg["cc"] = cc
+
+        raw = base64.urlsafe_b64encode(mime_msg.as_bytes()).decode("utf-8")
+        message_dict: Dict[str, Any] = {"raw": raw}
+        if thread_id:
+            message_dict["threadId"] = thread_id
+
+        draft = self._execute_api_call(
+            lambda s: s.users().drafts().create(userId=user_id, body={"message": message_dict})
+        )
+        logger.info("Draft created successfully in Gmail (ID: %s)", draft.get("id"))
+        return draft
 
     @staticmethod
     def parse_message_headers_and_body(msg: Dict[str, Any]) -> Dict[str, Any]:

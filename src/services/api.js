@@ -103,6 +103,12 @@ export const api = {
     markRead: (id) => request(`/emails/${id}/read`, { method: 'PATCH' }),
     delete: (id) => request(`/emails/${id}`, { method: 'DELETE' }),
     send: (payload) => request('/emails/send', { method: 'POST', body: JSON.stringify(payload) }),
+    changeFolder: (id, folder) =>
+      request(`/emails/${id}/folder`, { method: 'PATCH', body: JSON.stringify({ folder }) }),
+    snooze: (id, snoozeUntil) =>
+      request(`/emails/${id}/snooze`, { method: 'PATCH', body: JSON.stringify({ snooze_until: snoozeUntil }) }),
+    saveDraft: (payload) =>
+      request('/emails/draft', { method: 'POST', body: JSON.stringify(payload) }),
   },
 
   // ── AI Capabilities (Powered by Gemini) ──

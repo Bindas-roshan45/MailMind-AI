@@ -13,11 +13,14 @@ from src.database import get_session
 router = APIRouter()
 
 
+from src.core.background_worker import worker_state
+
+
 @router.get(
     "/health",
     status_code=status.HTTP_200_OK,
     summary="System Health & Database Status",
-    description="Returns service health status, DB connection verify, and demo mode indicator.",
+    description="Returns service health status, DB connection verify, demo mode indicator, and worker metrics.",
 )
 async def health_check(db: AsyncSession = Depends(get_session)):
     """Check system and database health."""
@@ -41,5 +44,6 @@ async def health_check(db: AsyncSession = Depends(get_session)):
         "database": db_status,
         "database_error": db_error,
         "demo_mode": settings.DEMO_MODE,
+        "worker": worker_state.to_dict(),
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }

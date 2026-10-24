@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import {
   Inbox, Star, AlertCircle, Clock, Send, FileText,
+  Archive, ShieldAlert, Trash2,
   BarChart2, BarChart3, CheckSquare, Calendar, Settings,
   Plus, ChevronDown, ChevronRight,
 } from 'lucide-react';
@@ -14,6 +15,9 @@ const FOLDER_NAV = [
   { id: 'snoozed',   label: 'Snoozed',   icon: Clock },
   { id: 'sent',      label: 'Sent',      icon: Send },
   { id: 'drafts',    label: 'Drafts',    icon: FileText },
+  { id: 'archive',   label: 'Archive',   icon: Archive },
+  { id: 'spam',      label: 'Spam',      icon: ShieldAlert },
+  { id: 'trash',     label: 'Trash',     icon: Trash2 },
 ];
 
 const PAGES_NAV = [

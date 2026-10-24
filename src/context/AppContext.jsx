@@ -434,6 +434,9 @@ export function AppProvider({ children }) {
       if (activeFolder === 'snoozed')   return email.folder === 'snoozed';
       if (activeFolder === 'sent')      return email.folder === 'sent';
       if (activeFolder === 'drafts')    return email.folder === 'drafts';
+      if (activeFolder === 'archive')   return email.folder === 'archive';
+      if (activeFolder === 'spam')      return email.folder === 'spam';
+      if (activeFolder === 'trash')     return email.folder === 'trash';
       return true;
     })();
 
