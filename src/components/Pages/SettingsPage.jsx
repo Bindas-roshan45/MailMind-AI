@@ -60,7 +60,7 @@ export default function SettingsPage() {
   return (
     <div className="flex-1 flex flex-col h-full overflow-y-auto p-4 sm:p-6 bg-[#F5F7FC] dark:bg-[#0F172A] space-y-6">
       {/* Top Header */}
-      <div className="flex items-center justify-between flex-wrap gap-4">
+      <div className="flex items-center justify-between flex-wrap gap-4 shrink-0">
         <div className="flex items-center gap-3">
           <button
             onClick={() => setCurrentPage('inbox')}
@@ -87,7 +87,7 @@ export default function SettingsPage() {
       </div>
 
       {/* Tabs Row */}
-      <div className="flex items-center gap-2 border-b border-[#E5EAF2] dark:border-[#334155] pb-2 overflow-x-auto no-scrollbar">
+      <div className="flex items-center gap-2 border-b border-[#E5EAF2] dark:border-[#334155] py-2 px-1 overflow-x-auto no-scrollbar min-h-[48px] shrink-0">
         {[
           { id: 'general',       label: 'General & Appearance', icon: Settings },
           { id: 'signatures',    label: 'Signatures & Profile', icon: PenTool },
