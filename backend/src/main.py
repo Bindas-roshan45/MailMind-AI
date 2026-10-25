@@ -4,6 +4,7 @@ Provides RESTful APIs for email management, AI reply automation, tasks, and sche
 """
 from contextlib import asynccontextmanager
 import logging
+import os
 import sys
 import time
 from datetime import datetime, timezone

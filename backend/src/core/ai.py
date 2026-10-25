@@ -554,6 +554,7 @@ class AIEngine:
     async def _call_openai_raw(self, prompt: str) -> Optional[str]:
         """Run OpenAI chat completion in asyncio.to_thread."""
         try:
+            # pyrefly: ignore[import-missing, missing-import]
             import openai
 
             def _sync_openai():
@@ -684,6 +685,7 @@ class AIEngine:
     ) -> Optional[str]:
         """Call OpenAI chat completion for reply generation."""
         try:
+            # pyrefly: ignore[missing-import]
             import openai
 
             tone_cfg = _resolve_tone(tone)
