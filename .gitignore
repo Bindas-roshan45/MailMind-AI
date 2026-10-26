@@ -23,8 +23,13 @@ dist-ssr
 *.sln
 # Environment — NEVER commit secrets
 .env
-.env.local
-.env.*.local
+.env.*
+!.env*.example
+!.env.example
+backend/.env
+backend/.env.*
+!backend/.env*.example
+!backend/.env.example
 
 # Python backend (Phase 2+)
 __pycache__/

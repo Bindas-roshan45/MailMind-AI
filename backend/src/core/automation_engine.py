@@ -139,7 +139,9 @@ class AutomationEngine:
             )
             sig = result.scalars().first()
 
-        if sig:
+        if sig and sig.content_text and sig.content_text.strip():
+            return sig.content_text.strip()
+        elif sig:
             sign_off = sig.custom_sign_off if sig.sign_off == "Custom" and sig.custom_sign_off else sig.sign_off
             lines = [sign_off, sig.sender_name]
             if sig.job_title and sig.company:
@@ -150,8 +152,14 @@ class AutomationEngine:
                 lines.append(sig.company)
             if sig.phone:
                 lines.append(sig.phone)
-            return "\n" + "\n".join(lines)
-        return ""
+            return "\n".join(lines)
+
+        # Fall back to user's saved name
+        user_res = await db.execute(select(User).where(User.id == user_id))
+        user_obj = user_res.scalars().first()
+        if user_obj and user_obj.name:
+            return f"Best regards,\n{user_obj.name}"
+        return "Best regards"
 
     @classmethod
     async def evaluate_email_for_automation(
@@ -297,7 +305,8 @@ class AutomationEngine:
         matching_rule: Optional[AutoReplyRule] = None
         for rule in active_rules:
             # Check category match
-            if rule.category and rule.category.value != category_name:
+            rule_cat = rule.category.value if hasattr(rule.category, "value") else str(rule.category or "")
+            if rule_cat and rule_cat.lower() != category_name.lower():
                 continue
 
             # Check sender pattern match
@@ -371,6 +380,7 @@ class AutomationEngine:
         decision = await cls.evaluate_email_for_automation(db, user, email, preferences)
         msg_id = email.message_id or f"local_{email.id}"
 
+        sig_text = await cls.get_user_signature_text(db, user.id, is_reply=True)
         reply_body = decision.reply_content
         if not reply_body:
             # Generate AI reply draft
@@ -380,12 +390,14 @@ class AutomationEngine:
                 body=email.body or email.preview or "",
                 tone=tone,
                 sender_name=email.from_name,
+                signature_text=sig_text,
+                user_name=user.name,
             )
 
-        # Append default signature if configured
-        sig_text = await cls.get_user_signature_text(db, user.id, is_reply=True)
-        if sig_text and sig_text not in reply_body:
-            reply_body = f"{reply_body.rstrip()}\n{sig_text}"
+        # Attach default signature cleanly if not already present
+        from src.core.ai import _attach_signature_once
+        if sig_text:
+            reply_body = _attach_signature_once(reply_body, sig_text)
 
         dispatched_message_id = None
         action_recorded = decision.action
@@ -404,7 +416,11 @@ class AutomationEngine:
                 logger.info("Auto-reply sent for email %s to %s", email.id, email.from_email)
             except Exception as send_err:
                 logger.error("Failed to auto-send reply: %s. Falling back to draft.", send_err)
+                decision.reason = f"Gmail send failed ({str(send_err)[:100]}). Falling back to draft."
                 action_recorded = "DRAFT_CREATED"
+        elif decision.action == "AUTO_SEND" and not gmail_client:
+            decision.reason = "Gmail OAuth not connected or demo mode active. Reply saved as draft."
+            action_recorded = "DRAFT_CREATED"
 
         # If not sent, persist as AIReplyDraft
         if action_recorded != "AUTO_REPLIED":

@@ -20,12 +20,25 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.api.deps import get_current_user, get_or_create_demo_user
 from src.config import settings
 from src.core.gmail import GMAIL_SCOPES, GmailClient
-from src.core.security import create_access_token, decrypt_secret, encrypt_secret
+from src.core.security import (
+    create_access_token,
+    decrypt_secret,
+    encrypt_secret,
+    hash_password,
+    verify_password,
+)
 from src.crud.connected_account import connected_account_crud
 from src.crud.user import user_crud
 from src.database import get_session
-from src.models import AuditLog, ConnectedAccount, User
-from src.schemas import APIResponse, TokenResponse
+from src.models import AuditLog, ConnectedAccount, User, UserPlan, UserPreferences
+from src.schemas import (
+    APIResponse,
+    AuthTokenResponse,
+    TokenResponse,
+    UserLoginRequest,
+    UserProfile,
+    UserRegisterRequest,
+)
 
 logger = logging.getLogger("mailmind-ai.auth")
 
@@ -224,6 +237,132 @@ async def _process_oauth_code(
     await db.commit()
     await db.refresh(gmail_acc)
     return gmail_acc
+
+
+@router.post(
+    "/register",
+    response_model=AuthTokenResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Register a new user",
+)
+async def register_user(
+    payload: UserRegisterRequest,
+    db: AsyncSession = Depends(get_session),
+):
+    """Register a new user account with email and password."""
+    normalized_email = str(payload.email).lower().strip()
+    existing = await user_crud.get_by_email(db, normalized_email)
+    if existing:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="An account with this email already exists",
+        )
+
+    hashed_pw = hash_password(payload.password)
+    user = await user_crud.create(
+        db,
+        email=normalized_email,
+        name=payload.name.strip(),
+        hashed_password=hashed_pw,
+        plan=UserPlan.FREE,
+        is_active=True,
+    )
+
+    # Ensure default user preferences exist
+    prefs = UserPreferences(
+        user_id=user.id,
+        theme="light",
+        layout_density="comfortable",
+        ai_model="gemini-2.5-flash",
+        default_reply_tone="professional",
+        auto_draft_enabled=True,
+        phishing_shield_enabled=True,
+        ai_confidence_threshold=85,
+        auto_sync_enabled=True,
+        sync_interval_minutes=15,
+        push_notifications_enabled=True,
+        sound_alerts_enabled=False,
+        daily_digest_enabled=True,
+        email_notifications_enabled=True,
+    )
+    db.add(prefs)
+    await db.commit()
+    await db.refresh(user)
+
+    token = create_access_token(
+        subject=user.id,
+        extra_claims={"email": user.email},
+    )
+
+    return AuthTokenResponse(
+        access_token=token,
+        token_type="bearer",
+        expires_in=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+        user=UserProfile(
+            id=user.id,
+            email=user.email,
+            name=user.name,
+            avatar_url=user.avatar_url,
+            plan=user.plan,
+            is_active=user.is_active,
+            connected_accounts_count=0,
+        ),
+    )
+
+
+@router.post(
+    "/login",
+    response_model=AuthTokenResponse,
+    summary="Sign in with email and password",
+)
+async def login_user(
+    payload: UserLoginRequest,
+    db: AsyncSession = Depends(get_session),
+):
+    """Authenticate with email and password to receive a JWT session token."""
+    normalized_email = str(payload.email).lower().strip()
+    user = await user_crud.get_by_email(db, normalized_email)
+    if not user or not user.hashed_password:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Incorrect email or password",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    if not verify_password(payload.password, user.hashed_password):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Incorrect email or password",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    if not user.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="User account is inactive",
+        )
+
+    token = create_access_token(
+        subject=user.id,
+        extra_claims={"email": user.email},
+    )
+
+    accounts = await connected_account_crud.get_by_user(db, user.id)
+
+    return AuthTokenResponse(
+        access_token=token,
+        token_type="bearer",
+        expires_in=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+        user=UserProfile(
+            id=user.id,
+            email=user.email,
+            name=user.name,
+            avatar_url=user.avatar_url,
+            plan=user.plan,
+            is_active=user.is_active,
+            connected_accounts_count=len(accounts),
+        ),
+    )
 
 
 @router.post("/demo-token", response_model=TokenResponse, summary="Issue demo JWT")

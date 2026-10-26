@@ -296,3 +296,160 @@ async def test_google_disconnect_and_status(client: AsyncClient, db_session: Asy
     assert status_res3.status_code == 200
     assert status_res3.json()["data"]["is_connected"] is False
     assert status_res3.json()["data"]["connected_email"] is None
+
+
+@pytest.mark.asyncio
+async def test_user_register_success(client: AsyncClient):
+    """Test registering a new user with valid email and password."""
+    payload = {
+        "email": "newuser@example.com",
+        "password": "StrongPassword123!",
+        "name": "New User",
+    }
+    res = await client.post("/api/v1/auth/register", json=payload)
+    assert res.status_code == 201
+    data = res.json()
+    assert data["token_type"] == "bearer"
+    assert data["access_token"]
+    assert data["user"]["email"] == "newuser@example.com"
+    assert data["user"]["name"] == "New User"
+    assert data["user"]["is_active"] is True
+
+    # Verify that the returned token can access protected endpoints
+    me_res = await client.get(
+        "/api/v1/auth/me",
+        headers={"Authorization": f"Bearer {data['access_token']}"},
+    )
+    assert me_res.status_code == 200
+    assert me_res.json()["data"]["email"] == "newuser@example.com"
+
+
+@pytest.mark.asyncio
+async def test_user_register_duplicate_email(client: AsyncClient):
+    """Test that attempting to register with an existing email returns 400 Bad Request."""
+    payload = {
+        "email": "duplicate@example.com",
+        "password": "StrongPassword123!",
+        "name": "First Registration",
+    }
+    first_res = await client.post("/api/v1/auth/register", json=payload)
+    assert first_res.status_code == 201
+
+    # Second registration with same email
+    second_res = await client.post("/api/v1/auth/register", json=payload)
+    assert second_res.status_code == 400
+    msg = second_res.json().get("message") or second_res.json().get("detail")
+    assert "already exists" in msg
+
+
+@pytest.mark.asyncio
+async def test_user_register_short_password(client: AsyncClient):
+    """Test that passwords shorter than 8 characters are rejected with 422."""
+    payload = {
+        "email": "shortpw@example.com",
+        "password": "short",
+        "name": "Short PW User",
+    }
+    res = await client.post("/api/v1/auth/register", json=payload)
+    assert res.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_user_login_success(client: AsyncClient):
+    """Test signing in with valid email and password returns JWT access token."""
+    # First register user
+    reg_payload = {
+        "email": "loginuser@example.com",
+        "password": "CorrectPassword123!",
+        "name": "Login User",
+    }
+    reg_res = await client.post("/api/v1/auth/register", json=reg_payload)
+    assert reg_res.status_code == 201
+
+    # Then log in
+    login_payload = {
+        "email": "loginuser@example.com",
+        "password": "CorrectPassword123!",
+    }
+    login_res = await client.post("/api/v1/auth/login", json=login_payload)
+    assert login_res.status_code == 200
+    data = login_res.json()
+    assert data["token_type"] == "bearer"
+    assert data["access_token"]
+    assert data["user"]["email"] == "loginuser@example.com"
+
+    # Verify token access to notifications
+    notif_res = await client.get(
+        "/api/v1/notifications?unread_only=false",
+        headers={"Authorization": f"Bearer {data['access_token']}"},
+    )
+    assert notif_res.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_user_login_invalid_password(client: AsyncClient):
+    """Test signing in with wrong password returns 401 Unauthorized."""
+    reg_payload = {
+        "email": "wrongpass@example.com",
+        "password": "CorrectPassword123!",
+        "name": "Wrong Pass User",
+    }
+    reg_res = await client.post("/api/v1/auth/register", json=reg_payload)
+    assert reg_res.status_code == 201
+
+    login_payload = {
+        "email": "wrongpass@example.com",
+        "password": "WrongPassword!",
+    }
+    login_res = await client.post("/api/v1/auth/login", json=login_payload)
+    assert login_res.status_code == 401
+    msg = login_res.json().get("message") or login_res.json().get("detail")
+    assert "Incorrect email or password" in msg
+
+
+@pytest.mark.asyncio
+async def test_user_login_nonexistent_email(client: AsyncClient):
+    """Test signing in with an unregistered email returns 401 Unauthorized."""
+    login_payload = {
+        "email": "nonexistent@example.com",
+        "password": "SomePassword123!",
+    }
+    login_res = await client.post("/api/v1/auth/login", json=login_payload)
+    assert login_res.status_code == 401
+    msg = login_res.json().get("message") or login_res.json().get("detail")
+    assert "Incorrect email or password" in msg
+
+
+@pytest.mark.asyncio
+async def test_demo_token_forbidden_when_demo_mode_disabled(client: AsyncClient):
+    """
+    Test condition for Task 1:
+    POST /api/v1/auth/demo-token strictly returns 403 Forbidden when DEMO_MODE=False.
+    """
+    with patch.object(settings, "DEMO_MODE", False):
+        res = await client.post("/api/v1/auth/demo-token")
+        assert res.status_code == 403
+        msg = res.json().get("message") or res.json().get("detail")
+        assert "Demo tokens are disabled when DEMO_MODE is false" in msg
+
+
+@pytest.mark.asyncio
+async def test_unauthorized_endpoints_without_token_when_demo_mode_disabled(client: AsyncClient):
+    """
+    Test condition for Task 1 & 6:
+    When DEMO_MODE=False, requests without a valid Bearer token return 401 Unauthorized.
+    """
+    with patch.object(settings, "DEMO_MODE", False):
+        # Notifications endpoint
+        notif_res = await client.get("/api/v1/notifications?unread_only=false")
+        assert notif_res.status_code == 401
+        msg = notif_res.json().get("message") or notif_res.json().get("detail")
+        assert "Not authenticated" in msg
+
+        # Current user endpoint
+        me_res = await client.get("/api/v1/auth/me")
+        assert me_res.status_code == 401
+        msg_me = me_res.json().get("message") or me_res.json().get("detail")
+        assert "Not authenticated" in msg_me
+
+

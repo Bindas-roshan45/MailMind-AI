@@ -18,9 +18,25 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    """Add optional password hash without touching existing user rows."""
-    op.add_column("users", sa.Column("hashed_password", sa.String(length=255), nullable=True))
+    """Add optional password hash without touching existing user rows (idempotent)."""
+    bind = op.get_bind()
+    try:
+        insp = sa.inspect(bind)
+        cols = [c["name"] for c in insp.get_columns("users")]
+    except Exception:
+        cols = []
+
+    if "hashed_password" not in cols:
+        op.add_column("users", sa.Column("hashed_password", sa.String(length=255), nullable=True))
 
 
 def downgrade() -> None:
-    op.drop_column("users", "hashed_password")
+    bind = op.get_bind()
+    try:
+        insp = sa.inspect(bind)
+        cols = [c["name"] for c in insp.get_columns("users")]
+    except Exception:
+        cols = ["hashed_password"]
+
+    if "hashed_password" in cols:
+        op.drop_column("users", "hashed_password")

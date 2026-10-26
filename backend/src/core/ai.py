@@ -27,26 +27,37 @@ logger = logging.getLogger("mailmind-ai.engine")
 _TONE_CONFIG: dict = {
     "professional": {
         "greeting": "Dear Sender,",
-        "closing": "Best regards,\nMailMind AI User",
+        "closing": "Best regards",
+        "sign_off": "Best regards",
         "prompt_style": (
-            "Write a concise, professional email reply. "
-            "Use formal vocabulary, avoid contractions, and maintain a respectful tone."
+            "Write a concise, natural, professional email reply. "
+            "Use clear vocabulary, respectful tone, and sound like a genuine professional."
         ),
     },
     "friendly": {
         "greeting": "Hi there,",
-        "closing": "Cheers,\nMailMind AI User",
+        "closing": "Cheers",
+        "sign_off": "Cheers",
         "prompt_style": (
-            "Write a warm and friendly email reply. "
-            "Use a conversational tone, light contractions, and a positive, engaging style."
+            "Write a warm, approachable, and friendly email reply. "
+            "Use a conversational, polite, and engaging style."
         ),
     },
     "formal": {
         "greeting": "Dear Sir/Madam,",
-        "closing": "Sincerely,\nMailMind AI User",
+        "closing": "Sincerely",
+        "sign_off": "Sincerely",
         "prompt_style": (
             "Write a strictly formal email reply. "
-            "Use no contractions, highly formal vocabulary, and an official, courteous tone."
+            "Use dignified vocabulary, no slang, and an official, courteous tone."
+        ),
+    },
+    "short": {
+        "greeting": "Hi,",
+        "closing": "Best",
+        "sign_off": "Best",
+        "prompt_style": (
+            "Write a brief, direct, to-the-point email reply under 60 words."
         ),
     },
 }
@@ -59,55 +70,137 @@ def _resolve_tone(tone: str) -> dict:
     return _TONE_CONFIG.get(tone.strip().lower(), _TONE_CONFIG[_DEFAULT_TONE])
 
 
+def _format_signature(
+    sign_off: str,
+    signature_text: Optional[str] = None,
+    user_name: Optional[str] = None,
+) -> str:
+    """
+    Format closing signature using configured signature_text or user_name.
+    Never falls back to hardcoded robotic persona names.
+    """
+    if signature_text and signature_text.strip():
+        return signature_text.strip()
+    clean_name = (user_name or "").strip()
+    if clean_name:
+        return f"{sign_off},\n{clean_name}"
+    return sign_off
+
+
+def _attach_signature_once(body: str, signature_str: str) -> str:
+    """Ensure signature is attached cleanly to the body without duplication."""
+    if not signature_str or not signature_str.strip():
+        return body.rstrip()
+
+    clean_body = body.rstrip()
+    clean_sig = signature_str.strip()
+
+    # If the body already ends with the signature or contains its significant lines, do not duplicate
+    sig_lines = [l.strip() for l in clean_sig.splitlines() if l.strip()]
+    if not sig_lines:
+        return clean_body
+
+    tail = clean_body[-200:].lower()
+    last_line = sig_lines[-1].lower()
+    if last_line in tail:
+        return clean_body
+
+    return f"{clean_body}\n\n{clean_sig}"
+
+
 def _build_smart_draft(
     subject: str,
     body: str,
     tone: str = "professional",
     sender_name: Optional[str] = None,
     language: str = "english",
+    signature_text: Optional[str] = None,
+    user_name: Optional[str] = None,
 ) -> str:
     """
     Locally-generated smart draft — no API key required.
-    Contextually tailored to the actual email subject, sender, and body snippet.
+    Contextually tailored to the actual email subject, sender, and content.
+    Never roleplays as an AI; speaks directly on behalf of the recipient.
     """
     cfg = _resolve_tone(tone)
     first_name = sender_name.split()[0].capitalize() if sender_name and sender_name.strip() else None
 
     greeting = (
         f"Dear {first_name}," if first_name and tone.lower() in ("professional", "formal")
-        else (f"Hi {first_name}," if first_name else cfg['greeting'])
+        else (f"Hi {first_name}," if first_name else cfg["greeting"])
     )
 
-    clean_subj = subject.strip() if subject else "your inquiry"
-    body_snippet = body[:120].strip() if body else "the matter"
+    clean_subj = subject.strip() if subject else "your message"
+    clean_body = (body or "").strip()
+    combined_text = f"{clean_subj} {clean_body}".lower()
+    closing = _format_signature(cfg.get("sign_off", "Best regards"), signature_text, user_name)
 
     lang_clean = (language or "english").lower().strip()
     if lang_clean == "hindi":
         salutation = f"नमस्ते {first_name}," if first_name else "नमस्ते,"
+        hindi_closing = signature_text.strip() if signature_text else f"सादर,\n{user_name}" if user_name else "सादर"
         return (
             f"{salutation}\n\n"
             f"\"{clean_subj}\" के संबंध में आपके संदेश के लिए धन्यवाद। "
-            f"मैंने आपके द्वारा साझा किए गए विवरण की समीक्षा कर ली है।\n\n"
-            f"मैं इस विषय पर आगे बढ़ने के लिए तैयार हूँ। कृपया बताएं कि इस पर विस्तृत चर्चा के लिए आपके पास इस सप्ताह कब समय होगा।\n\n"
-            f"सादर,\nMailMind AI User"
+            f"मैंने आपका संदेश प्राप्त कर लिया है और विवरण की समीक्षा कर रहा हूँ।\n\n"
+            f"मैं शीघ्र ही इस विषय पर आपसे आवश्यक अपडेट साझा करूँगा।\n\n"
+            f"{hindi_closing}"
         )
     elif lang_clean == "hinglish":
-        salutation = f"Hi {first_name}," if first_name else "Hi there,"
+        salutation = f"Hi {first_name}," if first_name else "Hi,"
+        hinglish_closing = signature_text.strip() if signature_text else f"Best regards,\n{user_name}" if user_name else "Best regards"
         return (
             f"{salutation}\n\n"
-            f"Thanks for reaching out regarding \"{clean_subj}\". "
-            f"Maine aapka message check kar liya hai aur main ispe aage proceed karna chahta hoon.\n\n"
-            f"Please batayein ki is week aap kab convenient time par ek quick discussion ke liye available hain.\n\n"
-            f"Best regards,\nMailMind AI User"
+            f"Thank you for reaching out regarding \"{clean_subj}\". "
+            f"Maine aapka message receive kar liya hai aur main iski details check kar raha hoon.\n\n"
+            f"Main jald hi aapse is regarding update share karta hoon.\n\n"
+            f"{hinglish_closing}"
         )
 
-    return (
-        f"{greeting}\n\n"
-        f"Thank you for reaching out regarding \"{clean_subj}\". "
-        f"I have reviewed your message regarding {body_snippet}... and would love to move forward with next steps.\n\n"
-        f"Please let me know your availability for a brief discussion this week.\n\n"
-        f"{cfg['closing']}"
+    # 1. Financial assistance / Loan / Grant / Funding / Sponsorship / Refund request
+    financial_keywords = [
+        "financial assistance", "monetary", "loan", "grant", "funding", "donation",
+        "financial support", "wire transfer", "bank assistance", "sponsorship",
+        "financial aid", "need money", "urgent funds", "fund transfer"
+    ]
+    if any(k in combined_text for k in financial_keywords):
+        core_message = (
+            f"Thank you for reaching out regarding \"{clean_subj}\".\n\n"
+            f"I have received your request and am currently reviewing the details provided. "
+            f"I will follow up with you as soon as I have completed this review."
+        )
+        draft = f"{greeting}\n\n{core_message}"
+        return _attach_signature_once(draft, closing)
+
+    # 2. Empty or very short body
+    if not clean_body or len(clean_body) < 12:
+        core_message = (
+            f"Thank you for your message regarding \"{clean_subj}\".\n\n"
+            f"Could you please share some additional details or context regarding your request? "
+            f"This will help me assist you as effectively as possible."
+        )
+        draft = f"{greeting}\n\n{core_message}"
+        return _attach_signature_once(draft, closing)
+
+    # 3. Decision / Policy / Proposal requiring review
+    decision_keywords = ["contract", "agreement", "proposal", "partnership", "decision", "policy", "legal", "terms"]
+    if any(k in combined_text for k in decision_keywords):
+        core_message = (
+            f"Thank you for reaching out regarding \"{clean_subj}\".\n\n"
+            f"I have received your note and the information shared. I am currently going through the "
+            f"details and will get back to you with next steps shortly."
+        )
+        draft = f"{greeting}\n\n{core_message}"
+        return _attach_signature_once(draft, closing)
+
+    # 4. Standard business inquiry / Meeting / Follow-up
+    core_message = (
+        f"Thank you for reaching out regarding \"{clean_subj}\".\n\n"
+        f"I have reviewed your message and would be glad to discuss this further. "
+        f"Please let me know what times work best for your schedule this week."
     )
+    draft = f"{greeting}\n\n{core_message}"
+    return _attach_signature_once(draft, closing)
 
 
 class AIEngine:
@@ -213,6 +306,8 @@ class AIEngine:
         sender_name: Optional[str] = None,
         language: str = "english",
         thread_history: Optional[str] = None,
+        signature_text: Optional[str] = None,
+        user_name: Optional[str] = None,
     ) -> Tuple[str, Dict[str, Any]]:
         """
         Generate a reply with comprehensive provider provenance metadata.
@@ -226,7 +321,8 @@ class AIEngine:
         # 1. Gemini (official google-genai SDK)
         if prov == "gemini" and g_key and not g_key.startswith("your_"):
             result = await self._generate_with_gemini(
-                email_subject, email_body, tone_key, sender_name, language, thread_history
+                email_subject, email_body, tone_key, sender_name, language, thread_history,
+                signature_text=signature_text, user_name=user_name
             )
             if result is not None:
                 return result, {
@@ -239,7 +335,8 @@ class AIEngine:
         # 2. OpenAI
         if prov == "openai" and o_key and not o_key.startswith("your_"):
             result = await self._generate_with_openai(
-                email_subject, email_body, tone_key, sender_name, language, thread_history
+                email_subject, email_body, tone_key, sender_name, language, thread_history,
+                signature_text=signature_text, user_name=user_name
             )
             if result is not None:
                 return result, {
@@ -257,6 +354,8 @@ class AIEngine:
             tone=tone_key,
             sender_name=sender_name,
             language=language,
+            signature_text=signature_text,
+            user_name=user_name,
         )
 
         notice = None
@@ -280,6 +379,8 @@ class AIEngine:
         sender_name: Optional[str] = None,
         language: str = "english",
         thread_history: Optional[str] = None,
+        signature_text: Optional[str] = None,
+        user_name: Optional[str] = None,
     ) -> str:
         """
         Generate a draft reply for an email (returns string).
@@ -292,8 +393,33 @@ class AIEngine:
             sender_name=sender_name,
             language=language,
             thread_history=thread_history,
+            signature_text=signature_text,
+            user_name=user_name,
         )
         return text
+
+    async def generate_reply_draft(
+        self,
+        subject: str,
+        body: str,
+        tone: str = "professional",
+        sender_name: Optional[str] = None,
+        language: str = "english",
+        thread_history: Optional[str] = None,
+        signature_text: Optional[str] = None,
+        user_name: Optional[str] = None,
+    ) -> str:
+        """Alias for generate_reply matching automation engine conventions."""
+        return await self.generate_reply(
+            email_subject=subject,
+            email_body=body,
+            tone=tone,
+            sender_name=sender_name,
+            language=language,
+            thread_history=thread_history,
+            signature_text=signature_text,
+            user_name=user_name,
+        )
 
     # ------------------------------------------------------------------
     # Public API: Summarization
@@ -604,6 +730,8 @@ class AIEngine:
         sender_name: Optional[str] = None,
         language: str = "english",
         thread_history: Optional[str] = None,
+        signature_text: Optional[str] = None,
+        user_name: Optional[str] = None,
     ) -> Optional[str]:
         """Call Google Gemini for reply generation."""
         try:
@@ -625,18 +753,27 @@ class AIEngine:
                 lang_instruction = "\nWrite the reply in natural, everyday Hinglish (Hindi written using the English/Latin alphabet, commonly used in business emails)."
 
             thread_section = f"\n\nConversation context:\n{thread_history}" if thread_history else ""
+            closing = _format_signature(tone_cfg.get("closing", "Best regards"), signature_text, user_name)
 
             prompt = (
-                f"You are MailMind AI, an intelligent email assistant.\n"
-                f"{tone_cfg['prompt_style']}{lang_instruction}\n\n"
+                "You are an expert email assistant drafting an email reply ON BEHALF OF THE RECIPIENT.\n"
+                "CRITICAL INSTRUCTIONS:\n"
+                "1. Write the reply directly from the first-person perspective of the recipient (e.g. 'I received your email', 'Thank you for contacting me').\n"
+                "2. NEVER describe yourself as an artificial intelligence, an AI assistant, or MailMind AI. Do NOT say 'As an AI' or 'I am unable to provide monetary funds'.\n"
+                "3. Address the sender's actual subject, questions, and context naturally, concisely, and professionally.\n"
+                "4. Never invent company policies, fake promises, financial decisions, approvals, or facts not present in the context.\n"
+                "5. If the email requests financial assistance, a loan, funding, a grant, a refund, or a sensitive decision, acknowledge receipt politely and state that you have received their request and will review it and follow up.\n"
+                "6. If the email body is empty or lacks information, write a polite note acknowledging the subject and asking for more details.\n"
+                f"7. Tone: {tone_cfg['prompt_style']}\n"
+                f"{lang_instruction}\n\n"
                 f"Original email:\n"
                 f"Subject: {subject}\n"
                 f"Sender: {sender_name or 'Sender'}\n"
                 f"Body:\n{body}{thread_section}\n\n"
-                f"Write only the reply body (no subject line). "
+                f"Write only the email reply body (no subject line).\n"
                 f"Begin with: {greeting}\n"
-                f"End with: {tone_cfg['closing']}\n"
-                f"Keep the reply concise, professional, and under 200 words."
+                f"End with: {closing}\n"
+                "Keep the reply concise and under 200 words."
             )
 
             def _sync_gemini():
@@ -665,6 +802,8 @@ class AIEngine:
             text = (response.text or "").strip()
             if text:
                 logger.info("Gemini draft generated (tone=%s, chars=%d)", tone, len(text))
+                if (signature_text or user_name) and closing:
+                    return _attach_signature_once(text, closing)
                 return text
             return None
         except ImportError:
@@ -682,6 +821,8 @@ class AIEngine:
         sender_name: Optional[str] = None,
         language: str = "english",
         thread_history: Optional[str] = None,
+        signature_text: Optional[str] = None,
+        user_name: Optional[str] = None,
     ) -> Optional[str]:
         """Call OpenAI chat completion for reply generation."""
         try:
@@ -703,6 +844,7 @@ class AIEngine:
                 lang_instruction = " Write the reply in natural, everyday Hinglish (Hindi written using the English/Latin alphabet)."
 
             thread_section = f"\n\nConversation context:\n{thread_history}" if thread_history else ""
+            closing = _format_signature(tone_cfg.get("closing", "Best regards"), signature_text, user_name)
 
             def _sync_openai():
                 client = openai.OpenAI(api_key=self.current_openai_key)
@@ -712,9 +854,16 @@ class AIEngine:
                         {
                             "role": "system",
                             "content": (
-                                f"You are MailMind AI, an intelligent email assistant. "
-                                f"{tone_cfg['prompt_style']}{lang_instruction} "
-                                f"Start with '{greeting}' and end with '{tone_cfg['closing']}'."
+                                "You are an expert email assistant drafting a reply ON BEHALF OF THE RECIPIENT.\n"
+                                "CRITICAL RULES:\n"
+                                "1. Write the reply directly from the first-person perspective of the recipient.\n"
+                                "2. NEVER describe yourself as an artificial intelligence or AI assistant. Do NOT say 'As an AI' or 'I am MailMind AI'.\n"
+                                "3. Address the sender's actual subject and questions naturally and professionally.\n"
+                                "4. Never invent company policies, financial decisions, approvals, or facts not present in the context.\n"
+                                "5. If the email requests financial assistance, a loan, funding, a grant, or a sensitive decision, acknowledge receipt politely and state that you have received their request and will review it and follow up.\n"
+                                "6. If the email body is empty or lacks information, write a polite note acknowledging the subject and asking for more details.\n"
+                                f"7. Tone: {tone_cfg['prompt_style']}{lang_instruction}\n"
+                                f"Start with '{greeting}' and end with '{closing}'."
                             ),
                         },
                         {
@@ -728,6 +877,8 @@ class AIEngine:
             response = await asyncio.to_thread(_sync_openai)
             text = (response.choices[0].message.content or "").strip()
             if text:
+                if (signature_text or user_name) and closing:
+                    return _attach_signature_once(text, closing)
                 return text
             return None
         except Exception as exc:

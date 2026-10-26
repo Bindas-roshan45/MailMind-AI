@@ -7,6 +7,11 @@ import {
   Trash2,
   History,
   Sliders,
+  Send,
+  FileEdit,
+  Info,
+  CheckCircle2,
+  RefreshCw,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { api } from '../../services/api';
@@ -19,6 +24,7 @@ export default function AutomationSettings() {
   const [automationMode, setAutomationMode] = useState('draft_only');
   const [dailyLimit, setDailyLimit] = useState(20);
   const [confidenceScore, setConfidenceScore] = useState(85);
+  const [workerStatus, setWorkerStatus] = useState(null);
   const [isCreatingRule, setIsCreatingRule] = useState(false);
 
   // New Rule Form State
@@ -35,14 +41,16 @@ export default function AutomationSettings() {
   const loadData = async () => {
     try {
       setLoading(true);
-      const [rulesRes, logsRes, prefRes] = await Promise.all([
+      const [rulesRes, logsRes, prefRes, workerRes] = await Promise.all([
         api.automation.listRules(),
         api.automation.getLogs(15),
         api.preferences.get(),
+        api.automation.getWorkerStatus().catch(() => null),
       ]);
 
       if (rulesRes?.data) setRules(rulesRes.data);
       if (logsRes?.data) setLogs(logsRes.data);
+      if (workerRes?.data) setWorkerStatus(workerRes.data);
       if (prefRes?.data) {
         setPaused(Boolean(prefRes.data.automation_paused));
         setAutomationMode(prefRes.data.automation_mode || 'draft_only');
@@ -66,6 +74,8 @@ export default function AutomationSettings() {
     try {
       await api.automation.togglePause(nextState);
       toast.success(nextState ? 'Automation paused globally' : 'Automation resumed');
+      const ws = await api.automation.getWorkerStatus().catch(() => null);
+      if (ws?.data) setWorkerStatus(ws.data);
     } catch {
       setPaused(!nextState);
       toast.error('Failed to update pause switch');
@@ -96,6 +106,25 @@ export default function AutomationSettings() {
       }
     } catch {
       toast.error('Failed to toggle rule');
+    }
+  };
+
+  const handleToggleRuleAction = async (id, currentAutoSend) => {
+    try {
+      const nextAutoSend = !currentAutoSend;
+      const res = await api.automation.toggleRuleAction(id, nextAutoSend);
+      if (res?.data) {
+        setRules((prev) =>
+          prev.map((r) => (r.id === id ? { ...r, auto_send: res.data.auto_send } : r))
+        );
+        toast.success(
+          res.data.auto_send
+            ? 'Rule switched to Auto-Send (Will send directly via Gmail if safe)'
+            : 'Rule switched to Draft Only (Safe mode — drafts created for review)'
+        );
+      }
+    } catch (err) {
+      toast.error(err?.message || 'Failed to update rule action');
     }
   };
 
@@ -152,7 +181,7 @@ export default function AutomationSettings() {
 
   return (
     <div className="space-y-6">
-      {/* Emergency Global Pause Switch */}
+      {/* Emergency Global Pause Switch & Worker Health */}
       <div
         className={`p-5 rounded-2xl border transition-all ${
           paused
@@ -167,28 +196,51 @@ export default function AutomationSettings() {
             <PlayCircle className="w-8 h-8 text-emerald-600 dark:text-emerald-400 shrink-0" />
           )}
           <div>
-            <h4 className="text-sm font-bold">
-              Global Automation Status: {paused ? 'PAUSED' : 'ACTIVE & RUNNING'}
-            </h4>
+            <div className="flex items-center gap-2">
+              <h4 className="text-sm font-bold">
+                Global Automation Status:{' '}
+                {paused ? 'PAUSED' : workerStatus?.operational_state || 'ACTIVE & RUNNING'}
+              </h4>
+              {workerStatus?.gmail_connected && (
+                <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-200 dark:bg-emerald-900/60 text-emerald-800 dark:text-emerald-200 flex items-center gap-1">
+                  <CheckCircle2 className="w-3 h-3" /> Gmail Connected
+                </span>
+              )}
+            </div>
             <p className="text-xs opacity-90 mt-0.5">
               {paused
                 ? 'All automatic actions are halted. Inbound messages create drafts for human review only.'
                 : 'Safety rules and auto-reply filters are active and evaluating incoming emails.'}
             </p>
+            {workerStatus?.last_cycle_at && (
+              <p className="text-[10px] opacity-75 mt-1 font-mono">
+                Last Worker Cycle: {new Date(workerStatus.last_cycle_at).toLocaleTimeString()} • Cycles: {workerStatus.total_cycles}
+              </p>
+            )}
           </div>
         </div>
 
-        <button
-          type="button"
-          onClick={handleTogglePause}
-          className={`px-4 py-2 rounded-xl text-xs font-bold transition-all shadow-sm ${
-            paused
-              ? 'bg-emerald-600 hover:bg-emerald-700 text-white'
-              : 'bg-amber-600 hover:bg-amber-700 text-white'
-          }`}
-        >
-          {paused ? 'Resume Automation' : 'Emergency Pause All'}
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={loadData}
+            title="Refresh Worker Status"
+            className="p-2 rounded-xl text-xs font-semibold bg-white/60 dark:bg-slate-800/60 hover:bg-white dark:hover:bg-slate-800 border border-slate-200 dark:border-slate-700 transition-all"
+          >
+            <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
+          </button>
+          <button
+            type="button"
+            onClick={handleTogglePause}
+            className={`px-4 py-2 rounded-xl text-xs font-bold transition-all shadow-sm ${
+              paused
+                ? 'bg-emerald-600 hover:bg-emerald-700 text-white'
+                : 'bg-amber-600 hover:bg-amber-700 text-white'
+            }`}
+          >
+            {paused ? 'Resume Automation' : 'Emergency Pause All'}
+          </button>
+        </div>
       </div>
 
       {/* Safety Guardrails & Mode Parameters */}
@@ -254,6 +306,22 @@ export default function AutomationSettings() {
         </div>
       </div>
 
+      {/* Educational Explainer Banner */}
+      <div className="p-4 rounded-xl border border-blue-200 dark:border-blue-900/60 bg-blue-50/50 dark:bg-blue-950/20 text-xs space-y-2">
+        <div className="flex items-center gap-2 font-bold text-blue-900 dark:text-blue-300">
+          <Info className="w-4 h-4 shrink-0 text-blue-600 dark:text-blue-400" />
+          <span>Understanding Rule Actions: Draft Only vs. Auto-Send</span>
+        </div>
+        <p className="text-slate-600 dark:text-slate-300 leading-relaxed">
+          <strong>Draft Only</strong> is MailMind&apos;s safe default. When an email matches a Draft Only rule, MailMind prepares an AI draft in your inbox for human review without sending it.
+          To allow an individual rule to directly send replies via Gmail, toggle its action to <strong>Auto-Send</strong> and set Default Action Mode to <strong>Auto-Reply</strong>.
+        </p>
+        <p className="text-slate-500 dark:text-slate-400 text-[11px] flex items-center gap-1.5">
+          <ShieldAlert className="w-3.5 h-3.5 text-amber-500 shrink-0" />
+          Safety Guarantee: Emails with sensitive topics, financial inquiries, security questions, or untrusted senders are always blocked from auto-sending and held for your explicit approval.
+        </p>
+      </div>
+
       {/* Rules Manager */}
       <div className="card-white p-5 space-y-4">
         <div className="flex items-center justify-between">
@@ -263,7 +331,7 @@ export default function AutomationSettings() {
               Configured Automation Rules
             </h4>
             <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-              Rules execute only if sensitive topics and phishing checks pass.
+              Toggle each rule&apos;s action between Draft Only and Auto-Send below.
             </p>
           </div>
           {!isCreatingRule && (
@@ -283,23 +351,14 @@ export default function AutomationSettings() {
           {rules.map((r) => (
             <div
               key={r.id}
-              className="p-3.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-900/50 flex items-center justify-between gap-3 text-xs"
+              className="p-3.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-900/50 flex items-center justify-between gap-3 text-xs flex-wrap md:flex-nowrap"
             >
-              <div className="space-y-1">
+              <div className="space-y-1 min-w-[200px]">
                 <div className="flex items-center gap-2 flex-wrap">
                   <span className="font-bold text-slate-800 dark:text-slate-100">{r.name}</span>
                   {r.category && (
                     <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-blue-100 dark:bg-blue-950 text-blue-700 dark:text-blue-300">
                       {r.category}
-                    </span>
-                  )}
-                  {r.auto_send ? (
-                    <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 dark:bg-amber-950 text-amber-700 dark:text-amber-300">
-                      Auto-Send Enabled
-                    </span>
-                  ) : (
-                    <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-slate-200 dark:bg-slate-800 text-slate-600 dark:text-slate-400">
-                      Draft Only
                     </span>
                   )}
                 </div>
@@ -308,7 +367,31 @@ export default function AutomationSettings() {
                 </p>
               </div>
 
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2 shrink-0">
+                {/* Action Mode Toggle Button */}
+                <button
+                  type="button"
+                  onClick={() => handleToggleRuleAction(r.id, r.auto_send)}
+                  title={r.auto_send ? 'Click to switch to Draft Only' : 'Click to authorize Auto-Send'}
+                  className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold flex items-center gap-1.5 transition-all border ${
+                    r.auto_send
+                      ? 'bg-amber-500/10 border-amber-300 dark:border-amber-700/60 text-amber-700 dark:text-amber-300 hover:bg-amber-500/20'
+                      : 'bg-slate-100 dark:bg-slate-800 border-slate-300 dark:border-slate-700 text-slate-700 dark:text-slate-300 hover:bg-slate-200'
+                  }`}
+                >
+                  {r.auto_send ? (
+                    <>
+                      <Send className="w-3 h-3 text-amber-600 dark:text-amber-400" />
+                      <span>Auto-Send</span>
+                    </>
+                  ) : (
+                    <>
+                      <FileEdit className="w-3 h-3 text-slate-500" />
+                      <span>Draft Only</span>
+                    </>
+                  )}
+                </button>
+
                 <button
                   type="button"
                   onClick={() => handleToggleRule(r.id)}
@@ -429,15 +512,48 @@ export default function AutomationSettings() {
               />
             </div>
 
-            <label className="flex items-center gap-2 cursor-pointer font-semibold text-amber-700 dark:text-amber-400">
-              <input
-                type="checkbox"
-                checked={ruleAutoSend}
-                onChange={(e) => setRuleAutoSend(e.target.checked)}
-                className="rounded border-slate-300 text-amber-600 focus:ring-amber-500"
-              />
-              Authorize Auto-Sending (Only sends if email is confirmed safe & passes sensitivity filter)
-            </label>
+            <div className="space-y-1.5">
+              <label className="block font-semibold text-slate-600 dark:text-slate-300">
+                Rule Execution Action
+              </label>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5">
+                <button
+                  type="button"
+                  onClick={() => setRuleAutoSend(false)}
+                  className={`p-3 rounded-xl border text-left transition-all ${
+                    !ruleAutoSend
+                      ? 'border-blue-500 bg-blue-500/10 text-blue-900 dark:text-blue-100 ring-1 ring-blue-500'
+                      : 'border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-400'
+                  }`}
+                >
+                  <div className="flex items-center gap-2 font-bold text-xs mb-1">
+                    <FileEdit className="w-3.5 h-3.5 text-blue-600 dark:text-blue-400" />
+                    <span>Draft Only (Recommended)</span>
+                  </div>
+                  <p className="text-[11px] opacity-80">
+                    Creates an AI draft in your inbox so you can review before sending.
+                  </p>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setRuleAutoSend(true)}
+                  className={`p-3 rounded-xl border text-left transition-all ${
+                    ruleAutoSend
+                      ? 'border-amber-500 bg-amber-500/10 text-amber-900 dark:text-amber-100 ring-1 ring-amber-500'
+                      : 'border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-400'
+                  }`}
+                >
+                  <div className="flex items-center gap-2 font-bold text-xs mb-1">
+                    <Send className="w-3.5 h-3.5 text-amber-600 dark:text-amber-400" />
+                    <span>Auto-Send (Direct Send)</span>
+                  </div>
+                  <p className="text-[11px] opacity-80">
+                    Sends reply automatically via Gmail when incoming email passes safety checks.
+                  </p>
+                </button>
+              </div>
+            </div>
 
             <div className="flex justify-end gap-2 pt-2">
               <button

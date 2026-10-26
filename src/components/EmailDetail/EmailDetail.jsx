@@ -500,6 +500,8 @@ function AIReplyPanel({ email }) {
         initialDraft={reply}
         sensitivityReason={sensitivityReason}
         sendEmailFn={sendEmail}
+        onRetryDraft={() => generateReply(tone, language)}
+        isGeneratingDraft={generating}
         onSendSuccess={(approvedText) => {
           setReply(approvedText);
           setSent(true);

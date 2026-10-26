@@ -70,6 +70,7 @@ class SaveDraftRequest(BaseModel):
 @router.post("/sync", response_model=APIResponse, summary="Sync Emails from Gmail")
 async def sync_emails(
     max_results: int = Query(30, ge=1, le=100),
+    force: bool = Query(True, description="Force sync bypassing recent sync throttle"),
     db: AsyncSession = Depends(get_session),
     user: User = Depends(get_current_user),
 ):
@@ -78,7 +79,7 @@ async def sync_emails(
     Refreshes tokens if needed, fetches new messages, runs AI categorization,
     and updates database records.
     """
-    result = await sync_user_gmail_inbox(db, user, max_results=max_results, force=True)
+    result = await sync_user_gmail_inbox(db, user, max_results=max_results, force=force)
     if result.get("reconnect_required"):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,

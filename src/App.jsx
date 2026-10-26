@@ -2,9 +2,10 @@ import { useEffect } from 'react';
 import { Toaster } from 'react-hot-toast';
 import { AppProvider, useApp } from './context/AppContext';
 import Dashboard from './components/Dashboard/Dashboard';
+import AuthModal from './components/Modals/AuthModal';
 
 function AppInner() {
-  const { theme } = useApp();
+  const { theme, authModalOpen, setAuthModalOpen, refreshInitialData } = useApp();
 
   useEffect(() => {
     document.documentElement.classList.toggle('dark',  theme === 'dark');
@@ -14,6 +15,14 @@ function AppInner() {
   return (
     <>
       <Dashboard />
+      <AuthModal
+        isOpen={authModalOpen}
+        onClose={() => setAuthModalOpen(false)}
+        onSuccess={() => {
+          setAuthModalOpen(false);
+          refreshInitialData();
+        }}
+      />
       <Toaster
         position="bottom-right"
         toastOptions={{

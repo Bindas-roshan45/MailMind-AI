@@ -22,13 +22,26 @@ class Base(DeclarativeBase):
     pass
 
 
-# Create async engine
-# echo=False in production; set to True for debugging SQL queries
-engine: AsyncEngine = create_async_engine(
-    str(settings.DATABASE_URL),
-    echo=os.getenv("SQL_ECHO", "false").lower() == "true",
-    future=True,
-)
+# Create async engine with production-ready connection pool
+engine_kwargs = {
+    "echo": os.getenv("SQL_ECHO", "false").lower() == "true",
+    "future": True,
+}
+
+db_url_str = str(settings.DATABASE_URL)
+if "postgresql" in db_url_str or "postgres" in db_url_str:
+    engine_kwargs.update({
+        "pool_pre_ping": True,
+        "pool_recycle": int(os.getenv("DB_POOL_RECYCLE", "300")),
+        "pool_size": int(os.getenv("DB_POOL_SIZE", "10")),
+        "max_overflow": int(os.getenv("DB_MAX_OVERFLOW", "20")),
+    })
+else:
+    engine_kwargs.update({
+        "pool_pre_ping": True,
+    })
+
+engine: AsyncEngine = create_async_engine(db_url_str, **engine_kwargs)
 
 # Create session maker
 async_session_maker = async_sessionmaker(

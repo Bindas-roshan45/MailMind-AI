@@ -97,7 +97,7 @@ app.add_middleware(
 )
 
 
-# ─── Request Timing & Logging Middleware ────────────────────────────
+# ─── Request Timing, Logging & Security Headers Middleware ─────────
 @app.middleware("http")
 async def log_requests(request: Request, call_next):
     start_time = time.time()
@@ -107,6 +107,15 @@ async def log_requests(request: Request, call_next):
         f"{request.method} {request.url.path} -> {response.status_code} ({duration * 1000:.1f}ms)"
     )
     response.headers["X-Process-Time"] = f"{duration:.4f}"
+
+    # Production Security Headers
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    response.headers["X-XSS-Protection"] = "1; mode=block"
+    if request.url.scheme == "https":
+        response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+
     return response
 
 

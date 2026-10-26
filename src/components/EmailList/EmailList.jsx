@@ -1,6 +1,7 @@
 import { Star, Inbox, RefreshCw } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { Avatar, CategoryBadge, EmptyState } from '../ui';
+import { formatLastSynced } from '../../utils/date';
 
 const FILTERS = [
   { id: 'all',          label: 'All' },
@@ -105,6 +106,7 @@ export default function EmailList({ onSelectMobile }) {
     toggleStar, markAsRead,
     syncGmail, syncing, loading, integrationStatus,
     selectEmailWithThread,
+    lastSyncedAt, backgroundSyncing,
   } = useApp();
 
   const handleSelect = (email) => {
@@ -131,16 +133,23 @@ export default function EmailList({ onSelectMobile }) {
             )}
           </div>
           <div className="flex items-center gap-2">
-            <span className="text-xs text-[#7B8497] font-medium">
-              {filteredEmails.length} {filteredEmails.length === 1 ? 'email' : 'emails'}
-            </span>
+            <div className="flex flex-col items-end">
+              <span className="text-xs text-[#7B8497] font-medium leading-none">
+                {filteredEmails.length} {filteredEmails.length === 1 ? 'email' : 'emails'}
+              </span>
+              {lastSyncedAt && (
+                <span className="text-[10px] text-[#94A3B8] dark:text-[#64748B] mt-0.5">
+                  {backgroundSyncing ? 'Syncing...' : formatLastSynced(lastSyncedAt)}
+                </span>
+              )}
+            </div>
             <button
               onClick={() => syncGmail()}
-              disabled={syncing}
+              disabled={syncing || backgroundSyncing}
               className={`p-1.5 rounded-lg border border-[#E5EAF2] dark:border-[#334155] text-[#7B8497] hover:text-[#4169E1] hover:border-[#4169E1] transition-all ${
-                syncing ? 'animate-spin text-[#4169E1]' : ''
+                (syncing || backgroundSyncing) ? 'animate-spin text-[#4169E1]' : ''
               }`}
-              title="Sync Inbox with Gmail"
+              title={lastSyncedAt ? `Last synced: ${new Date(lastSyncedAt).toLocaleTimeString()}` : "Sync Inbox with Gmail"}
             >
               <RefreshCw className="w-3.5 h-3.5" />
             </button>

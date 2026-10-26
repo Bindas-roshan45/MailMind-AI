@@ -10,7 +10,7 @@ from src.api.deps import get_current_user
 from src.core.ai import ai_engine
 from src.crud.task import task_crud
 from src.database import get_session
-from src.models import AIReplyDraft, Email, TaskPriority, User
+from src.models import AIReplyDraft, Email, EmailSignature, TaskPriority, User
 from src.schemas import APIResponse
 
 router = APIRouter()
@@ -128,6 +128,29 @@ async def generate_draft(
     if payload.prompt:
         body = f"{body}\n\nAdditional user prompt/instructions: {payload.prompt}"
 
+    # Fetch user's configured signature for replies
+    sig_result = await db.execute(
+        select(EmailSignature).where(
+            EmailSignature.user_id == user.id,
+            EmailSignature.is_default_reply == True,
+        ).order_by(EmailSignature.id.desc())
+    )
+    sig_record = sig_result.scalars().first()
+    if not sig_record:
+        # Fall back to any saved signature for user
+        sig_result = await db.execute(
+            select(EmailSignature).where(
+                EmailSignature.user_id == user.id
+            ).order_by(EmailSignature.id.asc())
+        )
+        sig_record = sig_result.scalars().first()
+
+    sig_text = None
+    if sig_record:
+        sig_text = sig_record.content_text.strip()
+    elif user.name:
+        sig_text = f"Best regards,\n{user.name}"
+
     # Generate reply content and metadata via AIEngine
     reply_content, metadata = await ai_engine.generate_reply_with_metadata(
         email_subject=subject,
@@ -136,6 +159,8 @@ async def generate_draft(
         language=payload.language,
         sender_name=sender_name,
         thread_history=thread_history,
+        signature_text=sig_text,
+        user_name=user.name,
     )
 
     # Save draft in database if associated with an email (is_approved=False by default)

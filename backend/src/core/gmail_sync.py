@@ -4,6 +4,7 @@ Fetches real Gmail inbox messages, handles automated token refresh,
 runs AI categorization and smart draft suggestions on inbound emails,
 and populates the database with real user email threads.
 """
+import asyncio
 from datetime import datetime, timezone, timedelta
 import logging
 import re
@@ -28,6 +29,18 @@ from src.models import (
 )
 
 logger = logging.getLogger("mailmind-ai.gmail_sync")
+
+# Global locks dictionary to prevent race conditions across background worker, manual sync, and frontend polling
+_user_sync_locks: Dict[int, asyncio.Lock] = {}
+_locks_guard = asyncio.Lock()
+
+
+async def _get_user_sync_lock(user_id: int) -> asyncio.Lock:
+    """Retrieve or create an asyncio.Lock for a specific user."""
+    async with _locks_guard:
+        if user_id not in _user_sync_locks:
+            _user_sync_locks[user_id] = asyncio.Lock()
+        return _user_sync_locks[user_id]
 
 
 async def get_gmail_client_for_user(
@@ -95,7 +108,12 @@ async def get_gmail_client_for_user(
     return client, gmail_acc
 
 
-def _heuristic_analyze_email(subject: str, body: str, sender_email: str) -> Dict[str, Any]:
+def _heuristic_analyze_email(
+    subject: str,
+    body: str,
+    sender_email: str,
+    user_name: Optional[str] = None,
+) -> Dict[str, Any]:
     """Fast, reliable initial classification and key takeaways for synced messages."""
     subj_lower = (subject or "").lower()
     body_lower = (body or "").lower()
@@ -146,7 +164,11 @@ def _heuristic_analyze_email(subject: str, body: str, sender_email: str) -> Dict
         key_points.append(f"Subject: {subject[:100]}")
 
     # Generate initial suggested reply preview
-    suggested_reply = _build_smart_draft(subject, body, "professional") if requires_reply else None
+    suggested_reply = (
+        _build_smart_draft(subject, body, "professional", user_name=user_name)
+        if requires_reply
+        else None
+    )
 
     return {
         "category": category,
@@ -170,11 +192,64 @@ async def sync_user_gmail_inbox(
     """
     Synchronize inbox messages from Google Gmail API into local database.
     Does not duplicate existing messages by message_id.
+    Guarded by per-user concurrency lock to prevent overlapping runs.
     """
-    client_tuple = await get_gmail_client_for_user(db, user.id)
-    if not client_tuple:
-        gmail_acc = await connected_account_crud.get_by_user_and_provider(db, user.id, "gmail")
-        if gmail_acc and gmail_acc.status == "error":
+    user_lock = await _get_user_sync_lock(user.id)
+    if user_lock.locked():
+        logger.debug("Sync for user %s already in progress; returning current state.", user.id)
+        return {
+            "synced": True,
+            "connected": True,
+            "new_count": 0,
+            "in_progress": True,
+            "message": "Inbox synchronization is already in progress.",
+        }
+
+    async with user_lock:
+        # Throttle non-forced background syncs if synced within the last 45 seconds
+        if not force:
+            quick_acc = await connected_account_crud.get_by_user_and_provider(db, user.id, "gmail")
+            if quick_acc and quick_acc.last_sync:
+                elapsed = (datetime.now(timezone.utc) - quick_acc.last_sync.replace(tzinfo=timezone.utc)).total_seconds()
+                if elapsed < 45:
+                    return {
+                        "synced": True,
+                        "connected": quick_acc.status == "connected",
+                        "cached": True,
+                        "new_count": 0,
+                        "last_sync": quick_acc.last_sync.isoformat(),
+                        "message": "Inbox is up to date.",
+                    }
+
+        client_tuple = await get_gmail_client_for_user(db, user.id)
+        if not client_tuple:
+            gmail_acc = await connected_account_crud.get_by_user_and_provider(db, user.id, "gmail")
+            if gmail_acc and gmail_acc.status == "error":
+                return {
+                    "synced": False,
+                    "connected": False,
+                    "reconnect_required": True,
+                    "new_count": 0,
+                    "error": "reconnect_required",
+                    "message": "Gmail authorization expired or was revoked. Please reconnect your Gmail account in Settings.",
+                }
+            return {
+                "synced": False,
+                "connected": False,
+                "reconnect_required": False,
+                "new_count": 0,
+                "message": "Gmail is not connected.",
+            }
+
+        client, account = client_tuple
+
+        try:
+            messages = client.list_messages(user_id="me", max_results=max_results)
+        except GmailReconnectionRequiredError as exc:
+            logger.warning("Gmail reconnection required for user %s: %s", user.id, exc)
+            account.status = "error"
+            db.add(account)
+            await db.commit()
             return {
                 "synced": False,
                 "connected": False,
@@ -183,142 +258,106 @@ async def sync_user_gmail_inbox(
                 "error": "reconnect_required",
                 "message": "Gmail authorization expired or was revoked. Please reconnect your Gmail account in Settings.",
             }
-        return {
-            "synced": False,
-            "connected": False,
-            "reconnect_required": False,
-            "new_count": 0,
-            "message": "Gmail is not connected.",
-        }
-
-    client, account = client_tuple
-
-    # Throttle non-forced syncs if synced within the last 45 seconds
-    if not force and account.last_sync:
-        elapsed = (datetime.now(timezone.utc) - account.last_sync.replace(tzinfo=timezone.utc)).total_seconds()
-        if elapsed < 45:
+        except Exception as exc:
+            logger.error("Failed to list Gmail messages for user %s: %s", user.id, exc)
             return {
-                "synced": True,
+                "synced": False,
                 "connected": True,
                 "new_count": 0,
-                "last_sync": account.last_sync.isoformat(),
-                "message": "Inbox is up to date.",
+                "error": str(exc),
+                "message": f"Gmail API error: {str(exc)}",
             }
 
-    try:
-        messages = client.list_messages(user_id="me", max_results=max_results)
-    except GmailReconnectionRequiredError as exc:
-        logger.warning("Gmail reconnection required for user %s: %s", user.id, exc)
-        account.status = "error"
+        new_messages_count = 0
+        newly_added_emails = []
+
+        for msg_meta in messages:
+            msg_id = msg_meta.get("id")
+            if not msg_id:
+                continue
+
+            # Check if already synced in database
+            existing = await email_crud.get_by_message_id(db, msg_id)
+            if existing:
+                continue
+
+            # Fetch message payload
+            raw_msg = client.get_message(msg_id)
+            if not raw_msg:
+                continue
+
+            parsed = client.parse_message_headers_and_body(raw_msg)
+            analysis = _heuristic_analyze_email(
+                parsed["subject"], parsed["body"], parsed["from_email"], user_name=user.name
+            )
+
+            email_row = Email(
+                user_id=user.id,
+                message_id=parsed["message_id"],
+                thread_id=parsed["thread_id"],
+                from_name=parsed["from_name"],
+                from_email=parsed["from_email"],
+                to=parsed["to"],
+                subject=parsed["subject"],
+                preview=parsed["preview"],
+                body=parsed["body"],
+                received_at=parsed["received_at"],
+                date=parsed["received_at"].date(),
+                category=analysis["category"],
+                urgency=analysis["urgency"],
+                requires_reply=analysis["requires_reply"],
+                is_read=parsed["is_read"],
+                is_starred=parsed["is_starred"],
+                is_important=parsed["is_important"],
+                folder=parsed["folder"],
+                has_attachments=parsed["has_attachments"],
+                attachment_count=parsed["attachment_count"],
+                ai_confidence=analysis["ai_confidence"],
+                ai_category=analysis["ai_category"],
+                ai_priority=analysis["ai_priority"],
+                ai_sentiment=analysis["ai_sentiment"],
+                ai_requires_reply=analysis["requires_reply"],
+                ai_key_points=analysis["ai_key_points"],
+                ai_suggested_reply=analysis["ai_suggested_reply"],
+            )
+            db.add(email_row)
+            newly_added_emails.append(email_row)
+            new_messages_count += 1
+
+        account.last_sync = datetime.now(timezone.utc)
         db.add(account)
         await db.commit()
+
+        # Run automated decision engine for newly synced emails if enabled
+        if newly_added_emails:
+            from src.core.automation_engine import automation_engine
+            from src.models import UserPreferences
+            pref_res = await db.execute(
+                select(UserPreferences).where(UserPreferences.user_id == user.id)
+            )
+            user_pref = pref_res.scalar_one_or_none()
+            if user_pref and not user_pref.automation_paused:
+                for new_em in newly_added_emails:
+                    try:
+                        await automation_engine.process_and_record(
+                            db=db,
+                            user=user,
+                            email=new_em,
+                            gmail_client=client,
+                            preferences=user_pref,
+                        )
+                    except Exception as auto_err:
+                        logger.warning("Automation error on email %s: %s", new_em.id, auto_err)
+
+        logger.info("Synced %d new Gmail messages for user %s", new_messages_count, user.id)
         return {
-            "synced": False,
-            "connected": False,
-            "reconnect_required": True,
-            "new_count": 0,
-            "error": "reconnect_required",
-            "message": "Gmail authorization expired or was revoked. Please reconnect your Gmail account in Settings.",
-        }
-    except Exception as exc:
-        logger.error("Failed to list Gmail messages for user %s: %s", user.id, exc)
-        return {
-            "synced": False,
+            "synced": True,
             "connected": True,
-            "new_count": 0,
-            "error": str(exc),
-            "message": f"Gmail API error: {str(exc)}",
+            "cached": False,
+            "new_count": new_messages_count,
+            "last_sync": account.last_sync.isoformat(),
+            "message": f"Synced {new_messages_count} new messages from Gmail.",
         }
-
-    new_messages_count = 0
-    newly_added_emails = []
-
-    for msg_meta in messages:
-        msg_id = msg_meta.get("id")
-        if not msg_id:
-            continue
-
-        # Check if already synced in database
-        existing = await email_crud.get_by_message_id(db, msg_id)
-        if existing:
-            continue
-
-        # Fetch message payload
-        raw_msg = client.get_message(msg_id)
-        if not raw_msg:
-            continue
-
-        parsed = client.parse_message_headers_and_body(raw_msg)
-        analysis = _heuristic_analyze_email(
-            parsed["subject"], parsed["body"], parsed["from_email"]
-        )
-
-        email_row = Email(
-            user_id=user.id,
-            message_id=parsed["message_id"],
-            thread_id=parsed["thread_id"],
-            from_name=parsed["from_name"],
-            from_email=parsed["from_email"],
-            to=parsed["to"],
-            subject=parsed["subject"],
-            preview=parsed["preview"],
-            body=parsed["body"],
-            received_at=parsed["received_at"],
-            date=parsed["received_at"].date(),
-            category=analysis["category"],
-            urgency=analysis["urgency"],
-            requires_reply=analysis["requires_reply"],
-            is_read=parsed["is_read"],
-            is_starred=parsed["is_starred"],
-            is_important=parsed["is_important"],
-            folder=parsed["folder"],
-            has_attachments=parsed["has_attachments"],
-            attachment_count=parsed["attachment_count"],
-            ai_confidence=analysis["ai_confidence"],
-            ai_category=analysis["ai_category"],
-            ai_priority=analysis["ai_priority"],
-            ai_sentiment=analysis["ai_sentiment"],
-            ai_requires_reply=analysis["requires_reply"],
-            ai_key_points=analysis["ai_key_points"],
-            ai_suggested_reply=analysis["ai_suggested_reply"],
-        )
-        db.add(email_row)
-        newly_added_emails.append(email_row)
-        new_messages_count += 1
-
-    account.last_sync = datetime.now(timezone.utc)
-    db.add(account)
-    await db.commit()
-
-    # Run automated decision engine for newly synced emails if enabled
-    if newly_added_emails:
-        from src.core.automation_engine import automation_engine
-        from src.models import UserPreferences
-        pref_res = await db.execute(
-            select(UserPreferences).where(UserPreferences.user_id == user.id)
-        )
-        user_pref = pref_res.scalar_one_or_none()
-        if user_pref and not user_pref.automation_paused:
-            for new_em in newly_added_emails:
-                try:
-                    await automation_engine.process_and_record(
-                        db=db,
-                        user=user,
-                        email=new_em,
-                        gmail_client=client,
-                        preferences=user_pref,
-                    )
-                except Exception as auto_err:
-                    logger.warning("Automation error on email %s: %s", new_em.id, auto_err)
-
-    logger.info("Synced %d new Gmail messages for user %s", new_messages_count, user.id)
-    return {
-        "synced": True,
-        "connected": True,
-        "new_count": new_messages_count,
-        "last_sync": account.last_sync.isoformat(),
-        "message": f"Synced {new_messages_count} new messages from Gmail.",
-    }
 
 
 async def get_or_sync_email_thread(
@@ -347,7 +386,9 @@ async def get_or_sync_email_thread(
                     msg_id = raw_msg.get("id")
                     if msg_id and msg_id not in existing_ids:
                         parsed = client.parse_message_headers_and_body(raw_msg)
-                        analysis = _heuristic_analyze_email(parsed["subject"], parsed["body"], parsed["from_email"])
+                        analysis = _heuristic_analyze_email(
+                            parsed["subject"], parsed["body"], parsed["from_email"], user_name=user.name
+                        )
                         email_row = Email(
                             user_id=user.id,
                             message_id=parsed["message_id"],

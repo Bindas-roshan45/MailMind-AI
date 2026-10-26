@@ -7,7 +7,7 @@ import hashlib
 import secrets
 from typing import List, Union
 
-from pydantic import AliasChoices, Field, field_validator
+from pydantic import AliasChoices, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -110,6 +110,25 @@ class Settings(BaseSettings):
         env_file_encoding="utf-8",
         extra="ignore",
     )
+
+    @model_validator(mode="after")
+    def validate_production_configuration(self) -> "Settings":
+        """Ensure critical security credentials and databases are valid in production."""
+        if not self.DEMO_MODE:
+            insecure_placeholders = {
+                "",
+                "your_very_long_random_secret_key_here",
+                "your_very_long_random_secret_key_here_change_this_in_production",
+                "change_this_in_production",
+                "secret",
+                "password",
+            }
+            if self.SECRET_KEY in insecure_placeholders or len(self.SECRET_KEY) < 24:
+                raise ValueError(
+                    "Security Configuration Error: In production mode (DEMO_MODE=False), "
+                    "SECRET_KEY must be an explicitly configured, persistent secret with at least 24 characters."
+                )
+        return self
 
     @property
     def fernet_key_bytes(self) -> bytes:

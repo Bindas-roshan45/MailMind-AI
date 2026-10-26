@@ -5,6 +5,8 @@
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || '/api/v1';
 
+let isDemoModeSupported = null;
+
 async function request(endpoint, options = {}) {
   const token = localStorage.getItem('mailmind_token');
   const headers = {
@@ -26,6 +28,12 @@ async function request(endpoint, options = {}) {
     }
 
     const data = await res.json();
+
+    // If demo-token endpoint specifically returned 403, mark demo mode disabled
+    if (res.status === 403 && endpoint.includes('/auth/demo-token')) {
+      isDemoModeSupported = false;
+    }
+
     if (!res.ok) {
       const errorMsg = data?.message || data?.detail || `API Error (${res.status})`;
 
@@ -38,17 +46,26 @@ async function request(endpoint, options = {}) {
 
       if (isAppJwtExpired && !options._retried) {
         localStorage.removeItem('mailmind_token');
-        try {
-          const demoRes = await fetch(`${API_BASE}/auth/demo-token`, { method: 'POST' });
-          if (demoRes.ok) {
-            const demoData = await demoRes.json();
-            if (demoData?.access_token) {
-              localStorage.setItem('mailmind_token', demoData.access_token);
-              return request(endpoint, { ...options, _retried: true });
+        // Only try demo-token fallback if demo mode hasn't been confirmed disabled
+        if (isDemoModeSupported !== false) {
+          try {
+            const demoRes = await fetch(`${API_BASE}/auth/demo-token`, { method: 'POST' });
+            if (demoRes.ok) {
+              const demoData = await demoRes.json();
+              if (demoData?.access_token) {
+                isDemoModeSupported = true;
+                localStorage.setItem('mailmind_token', demoData.access_token);
+                return request(endpoint, { ...options, _retried: true });
+              }
+            } else if (demoRes.status === 403) {
+              isDemoModeSupported = false;
             }
+          } catch {
+            // Demo tokens disabled or network error
           }
-        } catch {
-          // If demo token re-issue is not available, proceed with throwing error
+        }
+        if (typeof window !== 'undefined') {
+          window.dispatchEvent(new CustomEvent('mailmind:unauthorized'));
         }
       }
 
@@ -73,6 +90,10 @@ export const api = {
   // ── Authentication & User ──
   auth: {
     getDemoToken: () => request('/auth/demo-token', { method: 'POST' }),
+    login: (credentials) =>
+      request('/auth/login', { method: 'POST', body: JSON.stringify(credentials) }),
+    register: (payload) =>
+      request('/auth/register', { method: 'POST', body: JSON.stringify(payload) }),
     getMe: () => request('/auth/me'),
     getGoogleStatus: () => request('/auth/google/status'),
     getGoogleAuthUrl: () => request('/auth/google/url'),
@@ -97,7 +118,8 @@ export const api = {
     },
     get: (id) => request(`/emails/${id}`),
     stats: () => request('/emails/stats'),
-    sync: (maxResults = 30) => request(`/emails/sync?max_results=${maxResults}`, { method: 'POST' }),
+    sync: (maxResults = 30, force = true) =>
+      request(`/emails/sync?max_results=${maxResults}&force=${force}`, { method: 'POST' }),
     getThread: (threadId) => request(`/emails/threads/${threadId}`),
     toggleStar: (id) => request(`/emails/${id}/star`, { method: 'PATCH' }),
     markRead: (id) => request(`/emails/${id}/read`, { method: 'PATCH' }),
@@ -192,12 +214,18 @@ export const api = {
       request('/auto-reply/rules', { method: 'POST', body: JSON.stringify(payload) }),
     toggleRule: (id) =>
       request(`/auto-reply/rules/${id}/toggle`, { method: 'PATCH' }),
+    toggleRuleAction: (id, autoSend) =>
+      request(`/auto-reply/rules/${id}/action`, { method: 'PATCH', body: JSON.stringify({ auto_send: autoSend }) }),
+    updateRule: (id, payload) =>
+      request(`/auto-reply/rules/${id}`, { method: 'PUT', body: JSON.stringify(payload) }),
     deleteRule: (id) =>
       request(`/auto-reply/rules/${id}`, { method: 'DELETE' }),
     togglePause: (paused) =>
       request('/auto-reply/pause', { method: 'POST', body: JSON.stringify({ paused }) }),
     getLogs: (limit = 30) =>
       request(`/auto-reply/logs?limit=${limit}`),
+    getWorkerStatus: () =>
+      request('/auto-reply/worker-status'),
     evaluate: (emailId) =>
       request(`/auto-reply/evaluate/${emailId}`, { method: 'POST' }),
   },

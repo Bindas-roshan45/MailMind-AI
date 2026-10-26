@@ -1,12 +1,12 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   ShieldAlert,
-  Edit3,
   Send,
   X,
   AlertTriangle,
   CheckCircle2,
   Sparkles,
+  RefreshCw,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 
@@ -18,11 +18,23 @@ export default function SensitiveApprovalModal({
   sensitivityReason = 'Requires human review',
   onSendSuccess,
   sendEmailFn,
+  onRetryDraft,
+  isGeneratingDraft = false,
 }) {
-  const [replyText, setReplyText] = useState(initialDraft || email?.ai_suggested_reply || '');
-  const [isEditing, setIsEditing] = useState(false);
+  const [replyText, setReplyText] = useState('');
   const [isSending, setIsSending] = useState(false);
   const [isSent, setIsSent] = useState(false);
+  const [sendError, setSendError] = useState(null);
+
+  // Synchronize initial draft when modal opens or when draft arrives
+  useEffect(() => {
+    if (isOpen) {
+      const bestDraft = initialDraft || email?.ai_suggested_reply || '';
+      setReplyText(bestDraft);
+      setSendError(null);
+      setIsSent(false);
+    }
+  }, [isOpen, initialDraft, email?.ai_suggested_reply]);
 
   if (!isOpen || !email) return null;
 
@@ -37,6 +49,7 @@ export default function SensitiveApprovalModal({
     }
 
     setIsSending(true);
+    setSendError(null);
     try {
       if (sendEmailFn) {
         await sendEmailFn({
@@ -44,6 +57,7 @@ export default function SensitiveApprovalModal({
           subject: subject.startsWith('Re:') ? subject : `Re: ${subject}`,
           body: replyText,
           threadId: email?.thread_id || email?.threadId || null,
+          in_reply_to: email?.message_id || null,
         });
       }
       setIsSent(true);
@@ -54,9 +68,12 @@ export default function SensitiveApprovalModal({
       setTimeout(() => {
         setIsSent(false);
         onClose();
-      }, 1400);
+      }, 1200);
     } catch (err) {
-      toast.error(err?.message || 'Failed to dispatch email');
+      console.error('Sensitive approval send error:', err);
+      const msg = err?.message || 'Failed to dispatch email via Gmail API. Your edited text has been preserved.';
+      setSendError(msg);
+      toast.error(msg);
     } finally {
       setIsSending(false);
     }
@@ -124,45 +141,43 @@ export default function SensitiveApprovalModal({
           <div className="flex items-center justify-between">
             <label className="text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400 flex items-center gap-1.5">
               <Sparkles className="w-3.5 h-3.5 text-blue-500" />
-              Proposed AI Reply ({isEditing ? 'Editing Mode' : 'Read-only Preview'})
+              Editable Proposed Reply
             </label>
-            {!isEditing ? (
+            {onRetryDraft && (
               <button
                 type="button"
-                onClick={() => setIsEditing(true)}
+                onClick={onRetryDraft}
+                disabled={isGeneratingDraft || isSending}
                 className="text-xs font-medium text-blue-600 dark:text-blue-400 hover:underline flex items-center gap-1"
               >
-                <Edit3 className="w-3.5 h-3.5" />
-                Edit Reply Text
-              </button>
-            ) : (
-              <button
-                type="button"
-                onClick={() => setIsEditing(false)}
-                className="text-xs font-medium text-slate-600 dark:text-slate-300 hover:underline"
-              >
-                Done Editing
+                <RefreshCw className={`w-3 h-3 ${isGeneratingDraft ? 'animate-spin' : ''}`} />
+                <span>{isGeneratingDraft ? 'Generating...' : 'Regenerate Draft'}</span>
               </button>
             )}
           </div>
 
-          {isEditing ? (
-            <textarea
-              rows={8}
-              value={replyText}
-              onChange={(e) => setReplyText(e.target.value)}
-              placeholder="Edit your response before sending..."
-              className="w-full text-sm p-4 rounded-xl border border-blue-400 dark:border-blue-500 bg-white dark:bg-slate-900 text-slate-800 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-500 shadow-inner font-sans leading-relaxed"
-            />
-          ) : (
-            <div className="p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-900/50 text-sm text-slate-800 dark:text-slate-200 whitespace-pre-wrap font-sans leading-relaxed min-h-[160px] shadow-sm">
-              {replyText || <span className="text-slate-400 italic">No reply drafted yet. Click Edit to type a message.</span>}
+          {/* Actionable send error banner if dispatch failed */}
+          {sendError && (
+            <div className="p-3 rounded-xl bg-red-500/10 border border-red-300 dark:border-red-800 text-red-700 dark:text-red-300 text-xs flex items-center gap-2">
+              <AlertTriangle className="w-4 h-4 shrink-0 text-red-600 dark:text-red-400" />
+              <span>{sendError}</span>
             </div>
           )}
 
+          {/* Prefilled, directly editable textarea */}
+          <textarea
+            rows={9}
+            value={replyText}
+            onChange={(e) => setReplyText(e.target.value)}
+            placeholder="Review and edit the proposed reply before approving and sending..."
+            className="w-full text-sm p-4 rounded-xl border border-blue-400 dark:border-blue-500/70 bg-white dark:bg-slate-900 text-slate-800 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-500 shadow-inner font-sans leading-relaxed"
+          />
+
           <div className="flex items-center justify-between text-[11px] text-slate-400">
             <span>Character count: {replyText.length}</span>
-            <span>Safety Rule: Sensitive content requires explicit user approval</span>
+            <span className="text-amber-600 dark:text-amber-400 font-medium">
+              Human review required — will never auto-send
+            </span>
           </div>
         </div>
 
@@ -178,18 +193,6 @@ export default function SensitiveApprovalModal({
           </button>
 
           <div className="flex items-center gap-2">
-            {!isEditing && (
-              <button
-                type="button"
-                onClick={() => setIsEditing(true)}
-                disabled={isSending || isSent}
-                className="px-4 py-2 rounded-xl text-xs font-semibold border border-slate-300 dark:border-slate-700 text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors flex items-center gap-1.5"
-              >
-                <Edit3 className="w-3.5 h-3.5" />
-                Edit
-              </button>
-            )}
-
             <button
               type="button"
               onClick={handleSend}
@@ -197,13 +200,13 @@ export default function SensitiveApprovalModal({
               className={`px-5 py-2 rounded-xl text-xs font-semibold text-white shadow-md flex items-center gap-2 transition-all ${
                 isSent
                   ? 'bg-emerald-600'
-                  : 'bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 disabled:opacity-50'
+                  : 'bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 disabled:opacity-50 cursor-pointer'
               }`}
             >
               {isSending ? (
                 <>
                   <div className="w-3.5 h-3.5 border-2 border-white/40 border-t-white rounded-full animate-spin" />
-                  <span>Sending...</span>
+                  <span>Sending via Gmail...</span>
                 </>
               ) : isSent ? (
                 <>

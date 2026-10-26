@@ -1,11 +1,12 @@
 import { useState } from 'react';
 import {
   Search, Sun, Moon, Bell, Settings, Menu, X, ChevronDown,
-  Command,
+  Command, Loader2,
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { Avatar, MockDataBanner } from '../ui';
 import NotificationPanel from '../Notifications/NotificationPanel';
+import { formatLastSynced } from '../../utils/date';
 
 export default function Topbar() {
   const {
@@ -16,6 +17,8 @@ export default function Topbar() {
     currentPage, setCurrentPage,
     isMockData,
     integrationStatus,
+    syncing, backgroundSyncing, lastSyncedAt,
+    logout, setAuthModalOpen,
   } = useApp();
 
   const [showNotif, setShowNotif]     = useState(false);
@@ -59,9 +62,17 @@ export default function Topbar() {
         >
           {integrationStatus?.is_connected ? (
             <>
-              <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-              <span className="font-medium text-[#1E293B] dark:text-[#E2E8F0]">Gmail: Connected</span>
-              <span className="text-[11px] text-[#7B8497] border-l border-[#E5EAF2] dark:border-slate-700 pl-2">Synced</span>
+              {backgroundSyncing || syncing ? (
+                <Loader2 className="w-2.5 h-2.5 text-[#4169E1] animate-spin" />
+              ) : (
+                <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+              )}
+              <span className="font-medium text-[#1E293B] dark:text-[#E2E8F0]">
+                {backgroundSyncing || syncing ? 'Syncing...' : 'Gmail: Connected'}
+              </span>
+              <span className="text-[11px] text-[#7B8497] border-l border-[#E5EAF2] dark:border-slate-700 pl-2">
+                {backgroundSyncing || syncing ? 'Updating' : `Synced ${formatLastSynced(lastSyncedAt)}`}
+              </span>
             </>
           ) : (
             <>
@@ -127,68 +138,82 @@ export default function Topbar() {
           <Settings className="w-4 h-4" />
         </button>
 
-        {/* Profile Menu */}
-        <div className="relative pl-1">
-          <button
-            onClick={() => {
-              setShowProfile(prev => !prev);
-              setShowNotif(false);
-            }}
-            className="flex items-center gap-2 p-1 pl-1.5 rounded-lg hover:bg-[#F5F7FC] dark:hover:bg-[#28384E] border border-transparent hover:border-[#E5EAF2] dark:hover:border-[#334155] transition-all"
-          >
-            <Avatar name={user.name} size="sm" />
-            <div className="hidden sm:block text-left pr-1">
-              <p className="text-xs font-semibold text-[#1E293B] dark:text-white leading-none">{user.name}</p>
-              <p className="text-[10px] text-[#7B8497] mt-0.5">{user.plan}</p>
-            </div>
-            <ChevronDown className="w-3.5 h-3.5 text-[#7B8497]" />
-          </button>
+        {/* User Profile / Auth State */}
+        <div className="relative">
+          {user ? (
+            <>
+              <button
+                onClick={() => {
+                  setShowProfile(prev => !prev);
+                  setShowNotif(false);
+                }}
+                className="flex items-center gap-2 p-1 pl-1.5 rounded-lg hover:bg-[#F5F7FC] dark:hover:bg-[#28384E] border border-transparent hover:border-[#E5EAF2] dark:hover:border-[#334155] transition-all cursor-pointer"
+              >
+                <Avatar name={user.name} size="sm" />
+                <div className="hidden sm:block text-left pr-1">
+                  <p className="text-xs font-semibold text-[#1E293B] dark:text-white leading-none">{user.name}</p>
+                  <p className="text-[10px] text-[#7B8497] mt-0.5">{user.plan}</p>
+                </div>
+                <ChevronDown className="w-3.5 h-3.5 text-[#7B8497]" />
+              </button>
 
-          {showProfile && (
-            <div className="absolute right-0 top-11 w-56 bg-white dark:bg-[#1E293B] border border-[#E5EAF2] dark:border-[#334155] rounded-xl shadow-dropdown p-2 z-50 animate-slide-down">
-              <div className="px-3 py-2 border-b border-[#E5EAF2] dark:border-[#334155] mb-1">
-                <p className="text-xs font-semibold text-[#1E293B] dark:text-white">{user.name}</p>
-                <p className="text-[11px] text-[#7B8497] truncate">{user.email}</p>
-                <span className="inline-block mt-1 px-2 py-0.5 rounded text-[10px] font-medium bg-[#E8EEFF] text-[#4169E1] dark:bg-[#4169E1]/20 dark:text-[#93C5FD]">
-                  {user.plan}
-                </span>
-              </div>
-              <button
-                onClick={() => {
-                  setCurrentPage('settings');
-                  setShowProfile(false);
-                }}
-                className="w-full text-left px-3 py-1.5 rounded-md text-xs text-[#1E293B] dark:text-[#E2E8F0] hover:bg-[#F5F7FC] dark:hover:bg-[#28384E] transition-colors"
-              >
-                Account Settings
-              </button>
-              <button
-                onClick={() => {
-                  setCurrentPage('analytics');
-                  setShowProfile(false);
-                }}
-                className="w-full text-left px-3 py-1.5 rounded-md text-xs text-[#1E293B] dark:text-[#E2E8F0] hover:bg-[#F5F7FC] dark:hover:bg-[#28384E] transition-colors"
-              >
-                Analytics & Insights
-              </button>
-              <button
-                onClick={() => {
-                  setCurrentPage('tasks');
-                  setShowProfile(false);
-                }}
-                className="w-full text-left px-3 py-1.5 rounded-md text-xs text-[#1E293B] dark:text-[#E2E8F0] hover:bg-[#F5F7FC] dark:hover:bg-[#28384E] transition-colors"
-              >
-                Upcoming Tasks
-              </button>
-              <div className="border-t border-[#E5EAF2] dark:border-[#334155] mt-1 pt-1">
-                <button
-                  onClick={() => setShowProfile(false)}
-                  className="w-full text-left px-3 py-1.5 rounded-md text-xs text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/20 transition-colors"
-                >
-                  Sign Out
-                </button>
-              </div>
-            </div>
+              {showProfile && (
+                <div className="absolute right-0 top-11 w-56 bg-white dark:bg-[#1E293B] border border-[#E5EAF2] dark:border-[#334155] rounded-xl shadow-dropdown p-2 z-50 animate-slide-down">
+                  <div className="px-3 py-2 border-b border-[#E5EAF2] dark:border-[#334155] mb-1">
+                    <p className="text-xs font-semibold text-[#1E293B] dark:text-white">{user.name}</p>
+                    <p className="text-[11px] text-[#7B8497] truncate">{user.email}</p>
+                    <span className="inline-block mt-1 px-2 py-0.5 rounded text-[10px] font-medium bg-[#E8EEFF] text-[#4169E1] dark:bg-[#4169E1]/20 dark:text-[#93C5FD]">
+                      {user.plan}
+                    </span>
+                  </div>
+                  <button
+                    onClick={() => {
+                      setCurrentPage('settings');
+                      setShowProfile(false);
+                    }}
+                    className="w-full text-left px-3 py-1.5 rounded-md text-xs text-[#1E293B] dark:text-[#E2E8F0] hover:bg-[#F5F7FC] dark:hover:bg-[#28384E] transition-colors cursor-pointer"
+                  >
+                    Account Settings
+                  </button>
+                  <button
+                    onClick={() => {
+                      setCurrentPage('analytics');
+                      setShowProfile(false);
+                    }}
+                    className="w-full text-left px-3 py-1.5 rounded-md text-xs text-[#1E293B] dark:text-[#E2E8F0] hover:bg-[#F5F7FC] dark:hover:bg-[#28384E] transition-colors cursor-pointer"
+                  >
+                    Analytics & Insights
+                  </button>
+                  <button
+                    onClick={() => {
+                      setCurrentPage('tasks');
+                      setShowProfile(false);
+                    }}
+                    className="w-full text-left px-3 py-1.5 rounded-md text-xs text-[#1E293B] dark:text-[#E2E8F0] hover:bg-[#F5F7FC] dark:hover:bg-[#28384E] transition-colors cursor-pointer"
+                  >
+                    Upcoming Tasks
+                  </button>
+                  <div className="border-t border-[#E5EAF2] dark:border-[#334155] mt-1 pt-1">
+                    <button
+                      onClick={() => {
+                        setShowProfile(false);
+                        logout();
+                      }}
+                      className="w-full text-left px-3 py-1.5 rounded-md text-xs text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/20 transition-colors cursor-pointer font-medium"
+                    >
+                      Sign Out
+                    </button>
+                  </div>
+                </div>
+              )}
+            </>
+          ) : (
+            <button
+              onClick={() => setAuthModalOpen(true)}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#4169E1] hover:bg-blue-600 text-white text-xs font-semibold shadow-sm transition-all cursor-pointer"
+            >
+              <span>Sign In</span>
+            </button>
           )}
         </div>
       </div>
